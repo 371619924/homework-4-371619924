@@ -129,7 +129,7 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 	
-	
+  .globl __mtrap
 __mtrap:
 	# 交换 sp 与 mscratch，使 sp 变为内核栈指针，mscratch 保存用户 sp
 	csrrw	sp, mscratch, sp
