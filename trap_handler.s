@@ -105,144 +105,95 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
-
-    # 2. 保存所有寄存器
     addi sp, sp, -72
     sw ra, 0(sp)
-    sw t0, 4(sp)
-    sw t1, 8(sp)
-    sw t2, 12(sp)
-    sw t3, 16(sp)
-    sw t4, 20(sp)
-    sw t5, 24(sp)
-    sw t6, 28(sp)
-    sw a0, 32(sp)
-    sw a1, 36(sp)
-    sw a2, 40(sp)
-    sw a3, 44(sp)
-    sw a4, 48(sp)
-    sw a5, 52(sp)
-    sw a6, 56(sp)
-    sw a7, 60(sp)
-    sw s0, 64(sp)
-    sw s1, 68(sp)
-
-    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
+    ...
     csrr t0, mcause
-    li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，跳到 terminate
-
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
-    csrr t0, mepc           
-    lw t1, 0(t0)            
-
-    # 5. 检查是否 lw (opcode 0x00002003)
-    li t2, 0x00002003       
-    and t3, t1, t2
-    bne t3, t2, terminate   # 不是 lw，跳到 terminate
-
-    # 6. 获取未对齐的地址
-    csrr t4, mtval
-
-    # 7. 解析 lw 目标寄存器 (rd)
-    srli t5, t1, 7            
-    andi t5, t5, 0x1F        # t5 现在是 rd 的编号
-
-    # 8. 修正 lbu 读取顺序（小端序）
-    lbu t6, 0(t4)            # 最低地址的字节 -> 最低8位
-    lbu t3, 1(t4)
-    slli t3, t3, 8
-    or t6, t6, t3
-    lbu t3, 2(t4)
-    slli t3, t3, 16
-    or t6, t6, t3
-    lbu t3, 3(t4)
-    slli t3, t3, 24
-    or t6, t6, t3            # t6 包含组合后的32位值
-
-    # 9. 根据 rd 编号计算正确的栈偏移并存储
-    # t5: rd 编号，根据保存位置计算偏移量
-    li t3, 1
-    beq t5, t3, 1f           # 处理 x1 (ra)
-    li t3, 5
-    blt t5, t3, invalid_rd   # rd <5 且不是 x1，无效
-    li t3, 8
-    blt t5, t3, 2f           # 处理 x5-x7 (t0-t2)
-    li t3, 28
-    blt t5, t3, 3f           # 处理 x8-x9 或 x10-x17
-    li t3, 32
-    blt t5, t3, 4f           # 处理 x28-x31 (t3-t6)
-    j invalid_rd
-
-1:  # x1 (ra) 偏移 0
-    li t3, 0
-    j 9f
-2:  # x5-x7 (t0-t2) 偏移 4 + (rd-5)*4
-    addi t5, t5, -5
-    slli t3, t5, 2
-    addi t3, t3, 4
-    j 9f
-3:  # 检查是 x8-x9 (s0-s1) 还是 x10-x17 (a0-a7)
-    li t3, 10
-    blt t5, t3, 5f           # x8-x9
-    # x10-x17 (a0-a7) 偏移 32 + (rd-10)*4
-    addi t5, t5, -10
-    slli t3, t5, 2
-    addi t3, t3, 32
-    j 9f
-4:  # x28-x31 (t3-t6) 偏移 16 + (rd-28)*4
-    addi t5, t5, -28
-    slli t3, t5, 2
-    addi t3, t3, 16
-    j 9f
-5:  # x8-x9 (s0-s1) 偏移 64 + (rd-8)*4
-    addi t5, t5, -8
-    slli t3, t5, 2
-    addi t3, t3, 64
-
-9:  # 存储到正确位置
-    add t3, sp, t3
-    sw t6, 0(t3)
-    j 10f
-
-invalid_rd:
+    li t1, 4  # Misaligned Load Address
+    li t2, 6  # Misaligned Store Address
+    beq t0, t1, misaligned_access
+    beq t0, t2, misaligned_access
     j terminate
 
-10: # 10. 跳过错误指令
+misaligned_access:
+    csrr t4, mtval  # 获取未对齐地址
+    csrr t0, mepc   # 获取指令地址
+    lw t1, 0(t0)    # 读取指令
+
+    # 解析 opcode 判断是 lw 还是 sw
+    li t2, 0x00002003
+    and t3, t1, t2
+    beq t3, t2, handle_lw
+
+    li t2, 0x00002023
+    and t3, t1, t2
+    beq t3, t2, handle_sw
+
+    j terminate  # 不是 lw/sw，终止
+
+handle_lw:
+    # 解析 rs1, rd, 计算目标地址
+    srli t5, t1, 7  # rd
+    andi t5, t5, 0x1F
+    srli t6, t1, 15 # rs1
+    andi t6, t6, 0x1F
+    add t6, t6, t4  # rs1 + 偏移
+
+    # 处理未对齐加载
+    lbu t3, 0(t6)
+    lbu t4, 1(t6)
+    slli t4, t4, 8
+    or t3, t3, t4
+    lbu t4, 2(t6)
+    slli t4, t4, 16
+    or t3, t3, t4
+    lbu t4, 3(t6)
+    slli t4, t4, 24
+    or t3, t3, t4
+
+    # 存入 rd
+    addi t5, t5, 32
+    add t5, sp, t5
+    sw t3, 0(t5)
+
+    j resume_execution
+
+handle_sw:
+    # 解析 rs1, rs2, 计算目标地址
+    srli t6, t1, 15 # rs1
+    andi t6, t6, 0x1F
+    srli t5, t1, 20 # rs2
+    andi t5, t5, 0x1F
+    add t6, t6, t4  # rs1 + 偏移
+
+    # 从 rs2 获取值
+    addi t5, t5, 32
+    add t5, sp, t5
+    lw t3, 0(t5)
+
+    # 处理未对齐存储
+    sb t3, 0(t6)
+    srli t3, t3, 8
+    sb t3, 1(t6)
+    srli t3, t3, 8
+    sb t3, 2(t6)
+    srli t3, t3, 8
+    sb t3, 3(t6)
+
+resume_execution:
+    csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 11. 恢复所有寄存器
+    # 恢复寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
-    lw t1, 8(sp)
-    lw t2, 12(sp)
-    lw t3, 16(sp)
-    lw t4, 20(sp)
-    lw t5, 24(sp)
-    lw t6, 28(sp)
-    lw a0, 32(sp)
-    lw a1, 36(sp)
-    lw a2, 40(sp)
-    lw a3, 44(sp)
-    lw a4, 48(sp)
-    lw a5, 52(sp)
-    lw a6, 56(sp)
-    lw a7, 60(sp)
-    lw s0, 64(sp)
-    lw s1, 68(sp)
-
-    # 12. 释放栈空间并恢复 sp
+    ...
     addi sp, sp, 72
     csrrw sp, mscratch, sp
-
-    # 13. 继续执行程序
     mret
 
-terminate:
-    # 终止处理（省略具体代码）
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
