@@ -105,10 +105,7 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
-
-    # 2. 保存所有寄存器
     addi sp, sp, -72
     sw ra, 0(sp)
     sw t0, 4(sp)
@@ -129,52 +126,47 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
+    bne t0, t1, terminate
 
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
-    csrr t0, mepc           
-    lw t1, 0(t0)            
-
-    # 5. 检查是否 lw (opcode 0x00002003)
-    li t2, 0x00002003       
+    csrr t0, mepc
+    lw t1, 0(t0)
+    li t2, 0x00002003
     and t3, t1, t2
-    bne t3, t2, terminate   # 不是 lw，跳到 terminate
+    bne t3, t2, terminate
 
-    # 6. 获取未对齐的地址
-    csrr t4, mtval
+    csrr t4, mtval          # t4 = mtval, in our test this equals the base register s0
+    # ===== 新增代码：提取 lw 指令的立即数（偏移量） =====
+    srai t7, t1, 20         # t7 = lw立即数（符号扩展），例如 lw a0, 2(s0) 的偏移为 2
+    add t4, t4, t7          # t4 = mtval + offset，即有效地址 = s0 + 2
+    # ===== 结束新增代码 =====
 
-    # 7. 解析 lw 目标寄存器 (rd)
-    srli t5, t1, 7            
-    andi t5, t5, 0x1F        
+    srli t5, t1, 7
+    andi t5, t5, 0x1F
 
-    # 8. **修正 `lbu` 读取顺序（严格符合 Little-Endian）**
-    lbu t6, 0(t4)  # 读取最低字节
-    lbu t3, 1(t4)  # 读取次低字节
+    # 按小端序读取 4 个字节（低地址为低字节）
+    lbu t6, 0(t4)           # 读取最低字节
+    lbu t3, 1(t4)           
     slli t3, t3, 8
     or t6, t6, t3
 
-    lbu t3, 2(t4)  # 读取次高字节
+    lbu t3, 2(t4)           # 读取次高字节
     slli t3, t3, 16
     or t6, t6, t3
 
-    lbu t3, 3(t4)  # 读取最高字节
+    lbu t3, 3(t4)           # 读取最高字节
     slli t3, t3, 24
     or t6, t6, t3
 
-    # 9. **修正存储 (确保 rd 对齐)**
-    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
+    slli t5, t5, 2         # 计算目标寄存器在保存区域中的偏移 (rd * 4)
     addi t3, sp, 32
     add t3, t3, t5
-    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
+    sw t6, 0(t3)           # 将修正后的数据存入目标寄存器保存区
 
-    # 10. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 11. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
     lw t1, 8(sp)
@@ -194,11 +186,8 @@ __mtrap:
     lw s0, 64(sp)
     lw s1, 68(sp)
 
-    # 12. 释放栈空间并恢复 sp
     addi sp, sp, 72
     csrrw sp, mscratch, sp
-
-    # 13. 继续执行程序
     mret
 
 
