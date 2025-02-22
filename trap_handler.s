@@ -136,7 +136,7 @@ __mtrap:
     # Swap sp and mscratch so that sp becomes the kernel stack pointer.
     csrrw   sp, mscratch, sp
 
-    # Allocate trap frame for 30 registers (x1 and x3–x31) = 120 bytes.
+    # Allocate trap frame space for 30 registers (x1 and x3–x31) = 120 bytes.
     addi    sp, sp, -120
 
     # Save registers in order.
@@ -171,36 +171,36 @@ __mtrap:
     sw      t5,112(sp)       # x30 (t5)
     sw      t6,116(sp)       # x31 (t6)
 
-    # Check exception type: only handle misaligned load word.
+    # Check exception type: only handle misaligned load (mcause==4).
     csrr    t0, mcause
     li      t1, 4
     bne     t0, t1, trap_other
 
-    # Fetch the faulting instruction address and instruction word.
+    # Fetch faulting instruction address and instruction word.
     csrr    t0, mepc         # t0 = faulting instruction address
     lw      t1, 0(t0)        # t1 = instruction word
 
-    # Check that opcode (bits [6:0]) is 0x03 (load).
+    # Check that opcode (bits [6:0]) equals 0x03 (load).
     andi    t2, t1, 0x7F
     li      t3, 0x03
     bne     t2, t3, trap_other
 
-    # Check that funct3 (bits [14:12]) is 0x2 (lw).
+    # Check funct3 (bits [14:12]) equals 0x2 (lw).
     srai    t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
     bne     t2, t3, trap_other
 
-    # Extract destination register (rd, bits [11:7]).
+    # Extract rd (bits [11:7]).
     srai    t4, t1, 7
     andi    t4, t4, 0x1F
-    # Do not patch if rd is x0 or sp (x2).
+    # Do not patch if rd == 0 (x0) or rd == 2 (sp).
     beq     t4, zero, trap_other
     li      t3, 2
     beq     t4, t3, trap_other
 
-    # Compute the offset into the trap frame for the saved rd.
-    # Saved order: x1, x3, x4, … so if rd==1 then offset=0; else offset=(rd-2)*4.
+    # Compute offset in trap frame for saved rd:
+    # If rd == 1 then offset = 0; else offset = (rd - 2)*4.
     li      t3, 1
     beq     t4, t3, set_offset_zero
     addi    t3, t4, -2
@@ -212,43 +212,42 @@ set_offset_done:
     add     t3, sp, t3     # t3 now points to trap frame slot for rd.
     mv      a7, t3         # Save pointer in a7.
 
-    # Emulate the misaligned lw.
-    csrr    t5, mtval      # t5 = effective address A.
-    # Compute offset = A mod 4.
-    andi    t6, t5, 3      # t6 = offset.
+    # Emulate misaligned lw:
+    csrr    t5, mtval      # t5 = faulting effective address.
+    andi    t6, t5, 3      # t6 = offset = A mod 4.
     sub     t5, t5, t6     # t5 = aligned base address.
 
-    # Load the two adjacent aligned words.
-    lw      t7, 0(t5)      # first word.
-    lw      t8, 4(t5)      # second word.
+    # Load two adjacent aligned words.
+    lw      t0, 0(t5)      # first word.
+    lw      t1, 4(t5)      # second word.
 
-    # Combine the two words based on the offset.
+    # Combine the two words based on offset in t6.
     beq     t6, zero, lw_case0
-    li      t9, 1
-    beq     t6, t9, lw_case1
-    li      t9, 2
-    beq     t6, t9, lw_case2
-    li      t9, 3
-    beq     t6, t9, lw_case3
+    li      t2, 1
+    beq     t6, t2, lw_case1
+    li      t2, 2
+    beq     t6, t2, lw_case2
+    li      t2, 3
+    beq     t6, t2, lw_case3
 lw_case0:
-    mv      t6, t7
+    mv      t6, t0
     j       store_lw
 lw_case1:
-    srli    t7, t7, 8       # shift right 8 bits.
-    slli    t8, t8, 24      # shift left 24 bits.
-    or      t6, t7, t8
+    srli    t0, t0, 8      # Shift first word right by 8.
+    slli    t1, t1, 24     # Shift second word left by 24.
+    or      t6, t0, t1
     j       store_lw
 lw_case2:
-    srli    t7, t7, 16
-    slli    t8, t8, 16
-    or      t6, t7, t8
+    srli    t0, t0, 16     # Shift first word right by 16.
+    slli    t1, t1, 16     # Shift second word left by 16.
+    or      t6, t0, t1
     j       store_lw
 lw_case3:
-    srli    t7, t7, 24
-    slli    t8, t8, 8
-    or      t6, t7, t8
+    srli    t0, t0, 24     # Shift first word right by 24.
+    slli    t1, t1, 8      # Shift second word left by 8.
+    or      t6, t0, t1
 store_lw:
-    # Write the reconstructed word into the trap frame slot for rd.
+    # Write the reconstructed word into trap frame slot for rd.
     sw      t6, 0(a7)
 
     # Advance mepc to skip the faulting instruction.
@@ -256,7 +255,7 @@ store_lw:
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # Restore registers.
+    # Restore saved registers.
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
