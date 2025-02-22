@@ -126,22 +126,31 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
+    # 读取 mcause
     csrr t0, mcause
     li t1, 4   # Misaligned Load Address
-    bne t0, t1, terminate
+    li t2, 6   # Misaligned Store Address
+    beq t0, t1, handle_misaligned_load
+    beq t0, t2, handle_misaligned_store
 
+    # 其他异常，终止
+    j terminate
+
+handle_misaligned_load:
     csrr t4, mtval  # 获取未对齐地址
-    csrr t0, mepc   # 获取当前指令地址
-    lw t1, 0(t0)    # 读取指令
+    beqz t4, terminate  # 如果 mtval 是 0x00000000，说明访问了 NULL，直接终止
 
+    csrr t0, mepc   # 取指令地址
+    lw t1, 0(t0)    # 读取指令
     li t2, 0x00002003
     and t3, t1, t2
-    bne t3, t2, terminate  # 不是 `lw` 终止
+    bne t3, t2, terminate  # 不是 `lw`，终止
 
     srli t5, t1, 7  # 解析 rd
     andi t5, t5, 0x1F
 
-    lbu t3, 0(t4)   # 按字节读取
+    # 逐字节读取并重组
+    lbu t3, 0(t4)   
     lbu t6, 1(t4)
     slli t6, t6, 8
     or t3, t3, t6
@@ -152,13 +161,54 @@ __mtrap:
     slli t6, t6, 24
     or t3, t3, t6
 
+    # 存入 rd
     addi t5, t5, 32
     add t5, sp, t5
-    sw t3, 0(t5)  # 存入 rd
+    sw t3, 0(t5)
 
+    # 跳过错误指令
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
+    j restore_registers
+
+handle_misaligned_store:
+    csrr t4, mtval  # 获取未对齐地址
+    beqz t4, terminate  # 如果 mtval 是 0x00000000，说明访问了 NULL，直接终止
+
+    csrr t0, mepc   # 取指令地址
+    lw t1, 0(t0)    # 读取指令
+    li t2, 0x00002023
+    and t3, t1, t2
+    bne t3, t2, terminate  # 不是 `sw`，终止
+
+    srli t6, t1, 15 # 解析 rs1
+    andi t6, t6, 0x1F
+    srli t5, t1, 20 # 解析 rs2
+    andi t5, t5, 0x1F
+
+    # 计算存储地址
+    add t6, t6, t4  # rs1 + 偏移
+
+    # 获取 rs2 的值
+    addi t5, t5, 32
+    add t5, sp, t5
+    lw t3, 0(t5)
+
+    # 逐字节存储
+    sb t3, 0(t6)
+    srli t3, t3, 8
+    sb t3, 1(t6)
+    srli t3, t3, 8
+    sb t3, 2(t6)
+    srli t3, t3, 8
+    sb t3, 3(t6)
+
+    # 跳过错误指令
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+    j restore_registers
 
 restore_registers:
     lw ra, 0(sp)
