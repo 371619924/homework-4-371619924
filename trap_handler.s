@@ -150,19 +150,18 @@ __mtrap:
     srli t5, t1, 7            
     andi t5, t5, 0x1F        
 
-    # 8. **修正 `lbu` 读取顺序（确保 Little-Endian 正确）**
-    lbu t6, 3(t4)  # 读取最高字节（offset 3）
-    slli t6, t6, 24
+    # 8. **修正 `lbu` 读取顺序（确保 Little-Endian 规范）**
+    lbu t6, 0(t4)  # 读取最低字节（offset 0）
+    lbu t3, 1(t4)  # 读取次低字节（offset 1）
+    slli t3, t3, 8
+    or t6, t6, t3
 
     lbu t3, 2(t4)  # 读取次高字节（offset 2）
     slli t3, t3, 16
     or t6, t6, t3
 
-    lbu t3, 1(t4)  # 读取次低字节（offset 1）
-    slli t3, t3, 8
-    or t6, t6, t3
-
-    lbu t3, 0(t4)  # 读取最低字节（offset 0）
+    lbu t3, 3(t4)  # 读取最高字节（offset 3）
+    slli t3, t3, 24
     or t6, t6, t3
 
     # 9. **修正存储 (确保 rd 对齐)**
@@ -201,7 +200,6 @@ __mtrap:
 
     # 13. 继续执行程序
     mret
-
 
 	
 	
