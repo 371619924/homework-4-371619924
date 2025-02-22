@@ -150,24 +150,27 @@ __mtrap:
     srli t5, t1, 7            
     andi t5, t5, 0x1F        
 
-    # 7. 逐字节读取数据（修正 lbu 兼容 VRV）
-    lb t6, 0(t4)             
-    lb t7, 1(t4)             
-    slli t7, t7, 8
-    or t6, t6, t7            
+    # 7. 逐字节读取数据（**修正 `lb` 为 `lhu`，VRV 兼容**）
+    lbu t6, 0(t4)   # 读取第 1 字节
+    addi t3, t4, 1  # 手动计算偏移
+    lbu t4, 0(t3)   # 读取第 2 字节
+    slli t4, t4, 8
+    or t6, t6, t4
 
-    lb t7, 2(t4)             
-    slli t7, t7, 16
-    or t6, t6, t7            
+    addi t3, t3, 1  # 计算下一个字节偏移
+    lbu t4, 0(t3)   # 读取第 3 字节
+    slli t4, t4, 16
+    or t6, t6, t4
 
-    lb t7, 3(t4)             
-    slli t7, t7, 24
-    or t6, t6, t7            
+    addi t3, t3, 1  # 计算下一个字节偏移
+    lbu t4, 0(t3)   # 读取第 4 字节
+    slli t4, t4, 24
+    or t6, t6, t4
 
     # 8. 将修正后的数据存入 rd 对应的寄存器
-    addi t7, sp, 32           
-    add t7, t7, t5            
-    sw t6, 0(t7)              
+    addi t3, sp, 32
+    add t3, t3, t5
+    sw t6, 0(t3)
 
     # 9. 跳过错误指令
     addi t0, t0, 4
@@ -199,7 +202,6 @@ __mtrap:
 
     # 12. 继续执行程序
     mret
-
 
 
     
