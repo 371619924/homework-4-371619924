@@ -108,8 +108,8 @@ __mtrap:
     # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
 
-    # 2. 保存所有寄存器
-    addi sp, sp, -72
+    # 2. 保存所有寄存器 (扩展保存范围)
+    addi sp, sp, -128
     sw ra, 0(sp)
     sw t0, 4(sp)
     sw t1, 8(sp)
@@ -128,20 +128,34 @@ __mtrap:
     sw a7, 60(sp)
     sw s0, 64(sp)
     sw s1, 68(sp)
+    sw s2, 72(sp)
+    sw s3, 76(sp)
+    sw s4, 80(sp)
+    sw s5, 84(sp)
+    sw s6, 88(sp)
+    sw s7, 92(sp)
+    sw s8, 96(sp)
+    sw s9, 100(sp)
+    sw s10, 104(sp)
+    sw s11, 108(sp)
 
     # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
+    bne t0, t1, check_other_exceptions  # 不是 Misaligned Load，检查其他异常
 
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
-    csrr t0, mepc           
-    lw t1, 0(t0)            
+handle_misaligned_load:
+    # 4. 读取 mepc 处的指令
+    csrr t0, mepc            # t0 = mepc 地址
+    lhu t1, 0(t0)            # 读取低 16 位
+    lhu t2, 2(t0)            # 读取高 16 位
+    slli t2, t2, 16
+    or t1, t1, t2            # 合并完整指令到 t1
 
     # 5. 检查是否 lw (opcode 0x00002003)
     li t2, 0x00002003       
     and t3, t1, t2
-    bne t3, t2, terminate   # 不是 lw，跳到 terminate
+    bne t3, t2, check_other_exceptions  # 不是 lw，继续检查其他异常
 
     # 6. 获取未对齐的地址
     csrr t4, mtval
@@ -173,7 +187,28 @@ __mtrap:
     # 10. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
+    j restore_registers  # 直接恢复寄存器并返回
 
+check_other_exceptions:
+    # 处理其他异常情况
+    li t1, 8
+    beq t0, t1, handle_ecall  # 如果是 ECALL 例外，单独处理
+    j terminate
+
+handle_ecall:
+    # 处理 ecall 例外
+    addi t0, t0, 4
+    csrw mepc, t0
+    j restore_registers
+
+terminate:
+    # 触发 panic
+    li a0, 0
+    li a1, 0
+    li a7, 93
+    ecall
+
+restore_registers:
     # 11. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
@@ -193,13 +228,24 @@ __mtrap:
     lw a7, 60(sp)
     lw s0, 64(sp)
     lw s1, 68(sp)
+    lw s2, 72(sp)
+    lw s3, 76(sp)
+    lw s4, 80(sp)
+    lw s5, 84(sp)
+    lw s6, 88(sp)
+    lw s7, 92(sp)
+    lw s8, 96(sp)
+    lw s9, 100(sp)
+    lw s10, 104(sp)
+    lw s11, 108(sp)
 
     # 12. 释放栈空间并恢复 sp
-    addi sp, sp, 72
+    addi sp, sp, 128
     csrrw sp, mscratch, sp
 
     # 13. 继续执行程序
     mret
+
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
