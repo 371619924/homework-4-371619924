@@ -128,136 +128,153 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
+	.globl __mtrap
 __mtrap:
-# Allocate space for trap frame: we save 30 registers (x1, x3–x31) = 30×4 = 120 bytes.
-    addi    sp, sp, -120
+	# 交换 sp 和 mscratch：
+	# 使 sp 变为内核栈指针，mscratch 保存用户 sp
+	csrrw	sp, mscratch, sp
 
-# Save registers in fixed order:
-    sw      ra, 0(sp)                                                         # x1 (ra)
-    sw      gp, 4(sp)                                                         # x3 (gp)
-    sw      tp, 8(sp)                                                         # x4 (tp)
-    sw      t0, 12(sp)                                                        # x5 (t0)
-    sw      t1, 16(sp)                                                        # x6 (t1)
-    sw      t2, 20(sp)                                                        # x7 (t2)
-    sw      t3, 24(sp)                                                        # x8 (s0)
-    sw      t4, 28(sp)                                                        # x9 (s1)
-    sw      t5, 32(sp)                                                        # x10 (a0)
-    sw      t6, 36(sp)                                                        # x11 (a1)
-    sw      a0, 40(sp)                                                        # x12 (a2)
-    sw      a1, 44(sp)                                                        # x13 (a3)
-    sw      a2, 48(sp)                                                        # x14 (a4)
-    sw      a3, 52(sp)                                                        # x15 (a5)
-    sw      a4, 56(sp)                                                        # x16 (a6)
-    sw      a5, 60(sp)                                                        # x17 (a7)
-    sw      a6, 64(sp)                                                        # x18 (s2)
-    sw      a7, 68(sp)                                                        # x19 (s3)
-    sw      s0, 72(sp)                                                        # x20 (s4)
-    sw      s1, 76(sp)                                                        # x21 (s5)
-    sw      s2, 80(sp)                                                        # x22 (s6)
-    sw      s3, 84(sp)                                                        # x23 (s7)
-    sw      s4, 88(sp)                                                        # x24 (s8)
-    sw      s5, 92(sp)                                                        # x25 (s9)
-    sw      s6, 96(sp)                                                        # x26 (s10)
-    sw      s7, 100(sp)                                                       # x27 (s11)
-    sw      s8, 104(sp)                                                       # x28 (t3)
-    sw      s9, 108(sp)                                                       # x29 (t4)
-    sw      s10,112(sp)                                                       # x30 (t5)
-    sw      s11,116(sp)                                                       # x31 (t6)
+	# 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 30×4 = 120 字节
+	addi	sp, sp, -120
 
-# Check mcause: if not 4, jump to trap_other.
-    csrr    t0, mcause
-    li      t1, 4
-    bne     t0, t1, trap_other
+	# 按固定顺序保存寄存器：
+	sw	ra,   0(sp)		# 保存 ra (x1)
+	sw	gp,   4(sp)		# 保存 gp (x3)
+	sw	tp,   8(sp)		# 保存 tp (x4)
+	sw	t0,  12(sp)		# 保存 t0 (x5)
+	sw	t1,  16(sp)		# 保存 t1 (x6)
+	sw	t2,  20(sp)		# 保存 t2 (x7)
+	sw	t3,  24(sp)		# 保存 t3 (x8, s0)
+	sw	t4,  28(sp)		# 保存 t4 (x9, s1)
+	sw	t5,  32(sp)		# 保存 t5 (x10, a0)
+	sw	t6,  36(sp)		# 保存 t6 (x11, a1)
+	sw	a0,  40(sp)		# 保存 a0 (x12, a2)
+	sw	a1,  44(sp)		# 保存 a1 (x13, a3)
+	sw	a2,  48(sp)		# 保存 a2 (x14, a4)
+	sw	a3,  52(sp)		# 保存 a3 (x15, a5)
+	sw	a4,  56(sp)		# 保存 a4 (x16, a6)
+	sw	a5,  60(sp)		# 保存 a5 (x17, a7)
+	sw	a6,  64(sp)		# 保存 a6 (x18, s2)
+	sw	a7,  68(sp)		# 保存 a7 (x19, s3)
+	sw	s0,  72(sp)		# 保存 s0 (x20, s4)
+	sw	s1,  76(sp)		# 保存 s1 (x21, s5)
+	sw	s2,  80(sp)		# 保存 s2 (x22, s6)
+	sw	s3,  84(sp)		# 保存 s3 (x23, s7)
+	sw	s4,  88(sp)		# 保存 s4 (x24, s8)
+	sw	s5,  92(sp)		# 保存 s5 (x25, s9)
+	sw	s6,  96(sp)		# 保存 s6 (x26, s10)
+	sw	s7, 100(sp)		# 保存 s7 (x27, s11)
+	sw	s8, 104(sp)		# 保存 s8 (x28, t3)
+	sw	s9, 108(sp)		# 保存 s9 (x29, t4)
+	sw	s10,112(sp)		# 保存 s10 (x30, t5)
+	sw	s11,116(sp)		# 保存 s11 (x31, t6)
 
-# Get faulting instruction address and fetch the instruction word.
-    csrr    t0, mepc                                                          # t0 = faulting instruction address
-    lw      t1, 0(t0)                                                         # t1 = instruction word
+	# 检查 mcause 是否为 4（misaligned load），否则跳转 trap_other
+	csrr	t0, mcause
+	li		t1, 4
+	bne		t0, t1, trap_other
 
-# Check opcode (bits [6: 0] should equal 0x03 for a load).
-    andi    t2, t1, 0x7F
-    li      t3, 0x03
-    bne     t2, t3, trap_other
+	# 从 mepc 获取导致异常的指令地址，并取出指令字
+	csrr	t0, mepc		# t0 = 出错指令地址
+	lw		t1, 0(t0)		# t1 = 指令字
 
-# Check funct3 (bits [14: 12] should equal 0x2 for lw).
-    srai    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 0x2
-    bne     t2, t3, trap_other
+	# 检查 opcode（低 7 位）是否为 0x03（load 指令）
+	andi	t2, t1, 0x7F
+	li		t3, 0x03
+	bne		t2, t3, trap_other
 
-# Extract destination register (rd from bits [11: 7]).
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F                                                      # t4 = rd
+	# 检查 funct3（位 [14:12]）是否为 0x2（lw 指令）
+	srai	t2, t1, 12
+	andi	t2, t2, 0x7
+	li		t3, 0x2
+	bne		t2, t3, trap_other
 
-# If rd is 0, nothing to patch. Also, if rd==2 (sp), we do not handle.
-    beq     t4, zero, trap_other
-    li      t2, 1
-    beq     t4, t2, update_reg                                                # For rd==1, our trap frame slot is at offset 0.
-    li      t2, 2
-    beq     t4, t2, trap_other                                                # Do not patch if destination is sp.
-# For rd >= 3, compute offset = (rd - 2) * 4.
-    addi    t2, t4, -2
-    slli    t2, t2, 2
-    j       update_reg_label
-# Reconstruct the misaligned load from four individual byte loads.
-    csrr    t5, mtval                                                         # t5 = faulting memory address (mtval)
-    lbu     t6, 0(t5)                                                         # load byte0 into t6
-    lbu     t7, 1(t5)                                                         # load byte1 into t7
-    lbu     t8, 2(t5)                                                         # load byte2 into t8
-    lbu     t9, 3(t5)                                                         # load byte3 into t9
+	# 提取目标寄存器号 rd（位 [11:7]）
+	srai	t4, t1, 7
+	andi	t4, t4, 0x1F	# t4 = rd
+	beq		t4, zero, trap_other	# 若 rd 为 0，无须修补
+	li		t2, 2
+	beq		t4, t2, trap_other	# 若 rd 为 sp (x2)，不处理
 
-    slli    t7, t7, 8
-    slli    t8, t8, 16
-    slli    t9, t9, 24
-    or      t6, t6, t7
-    or      t6, t6, t8
-    or      t6, t6, t9
+	# 如果 rd==1，则偏移量为 0；否则偏移量 = (rd - 2) * 4
+	li		t2, 1
+	beq		t4, t2, update_reg_offset
+	addi	t2, t4, -2
+	slli	t2, t2, 2
+	j		update_reg_done
+update_reg_offset:
+	li		t2, 0
+update_reg_done:
+	add		t2, sp, t2		# t2 指向 trap frame 中保存的目标寄存器位置
 
-# Patch the trap frame: write the computed word into the slot for the destination register.
-    sw      t6, 0(t2)
+	# 利用四次 lbu 重构 misaligned load 的 32 位数据
+	csrr	t5, mtval		# t5 = 出错的内存地址
+	lbu		t6, 0(t5)		# 加载字节0
+	addi	t0, t5, 1		# 计算字节1的地址
+	lbu		t7, 0(t0)		# 加载字节1
+	addi	t0, t5, 2		# 计算字节2的地址
+	lbu		t8, 0(t0)		# 加载字节2
+	addi	t0, t5, 3		# 计算字节3的地址
+	lbu		t9, 0(t0)		# 加载字节3
 
-# Increment mepc to resume at the instruction after the fault.
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
+	slli	t7, t7, 8
+	slli	t8, t8, 16
+	slli	t9, t9, 24
+	or		t6, t6, t7
+	or		t6, t6, t8
+	or		t6, t6, t9
 
-# Restore registers from the trap frame.
-    lw      ra, 0(sp)
-    lw      gp, 4(sp)
-    lw      tp, 8(sp)
-    lw      t0, 12(sp)
-    lw      t1, 16(sp)
-    lw      t2, 20(sp)
-    lw      t3, 24(sp)
-    lw      t4, 28(sp)
-    lw      t5, 32(sp)
-    lw      t6, 36(sp)
-    lw      a0, 40(sp)
-    lw      a1, 44(sp)
-    lw      a2, 48(sp)
-    lw      a3, 52(sp)
-    lw      a4, 56(sp)
-    lw      a5, 60(sp)
-    lw      a6, 64(sp)
-    lw      a7, 68(sp)
-    lw      s0, 72(sp)
-    lw      s1, 76(sp)
-    lw      s2, 80(sp)
-    lw      s3, 84(sp)
-    lw      s4, 88(sp)
-    lw      s5, 92(sp)
-    lw      s6, 96(sp)
-    lw      s7, 100(sp)
-    lw      s8, 104(sp)
-    lw      s9, 108(sp)
-    lw      s10,112(sp)
-    lw      s11,116(sp)
+	# 将重构后的数据写入 trap frame 中对应目标寄存器的位置
+	sw		t6, 0(t2)
 
-    addi    sp, sp, 120                                                       # Deallocate trap frame
+	# 更新 mepc，使其跳过出错指令（加 4）
+	csrr	t0, mepc
+	addi	t0, t0, 4
+	csrw	mepc, t0
 
-# Swap back: restore user sp from mscratch.
-    csrrw   sp, mscratch, sp
+	# 从 trap frame 中恢复所有寄存器
+	lw		ra,   0(sp)
+	lw		gp,   4(sp)
+	lw		tp,   8(sp)
+	lw		t0,  12(sp)
+	lw		t1,  16(sp)
+	lw		t2,  20(sp)
+	lw		t3,  24(sp)
+	lw		t4,  28(sp)
+	lw		t5,  32(sp)
+	lw		t6,  36(sp)
+	lw		a0,  40(sp)
+	lw		a1,  44(sp)
+	lw		a2,  48(sp)
+	lw		a3,  52(sp)
+	lw		a4,  56(sp)
+	lw		a5,  60(sp)
+	lw		a6,  64(sp)
+	lw		a7,  68(sp)
+	lw		s0,  72(sp)
+	lw		s1,  76(sp)
+	lw		s2,  80(sp)
+	lw		s3,  84(sp)
+	lw		s4,  88(sp)
+	lw		s5,  92(sp)
+	lw		s6,  96(sp)
+	lw		s7, 100(sp)
+	lw		s8, 104(sp)
+	lw		s9, 108(sp)
+	lw		s10,112(sp)
+	lw		s11,116(sp)
 
-    mret                                                                      # Return to the faulting code
+	addi	sp, sp, 120		# 释放 trap frame 空间
+
+	# 恢复用户 sp：将 mscratch 中的值交换回 sp
+	csrrw	sp, mscratch, sp
+
+	mret				# 返回异常发生处继续执行
+
+trap_other:
+	addi	sp, sp, 120		# 释放 trap frame 空间
+	csrrw	sp, mscratch, sp	# 恢复用户 sp
+	j		terminate
 
 
 
