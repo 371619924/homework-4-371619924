@@ -150,22 +150,20 @@ __mtrap:
     srli t5, t1, 7            
     andi t5, t5, 0x1F        
 
-    # 8. 逐字节读取数据
-    lbu t6, 0(t4)   
-    addi t3, t4, 1  
-    lbu t4, 0(t3)  
-    slli t4, t4, 8
-    or t6, t6, t4
+    # 8. **修正读取顺序（小端序，最高字节先加载）**
+    lbu t6, 3(t4)  # 最高字节
+    slli t6, t6, 24
 
-    addi t3, t3, 1  
-    lbu t4, 0(t3)  
-    slli t4, t4, 16
-    or t6, t6, t4
+    lbu t7, 2(t4)  
+    slli t7, t7, 16
+    or t6, t6, t7
 
-    addi t3, t3, 1  
-    lbu t4, 0(t3)  
-    slli t4, t4, 24
-    or t6, t6, t4
+    lbu t7, 1(t4)  
+    slli t7, t7, 8
+    or t6, t6, t7
+
+    lbu t7, 0(t4)  # 最低字节
+    or t6, t6, t7
 
     # 9. **修正存储 (确保 rd 对齐)**
     slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
@@ -203,8 +201,6 @@ __mtrap:
 
     # 13. 继续执行程序
     mret
-
-    
 
 	
 	
