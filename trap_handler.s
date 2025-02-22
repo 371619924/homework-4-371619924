@@ -179,8 +179,7 @@ __mtrap:
 	beq     t0, t1, handle_fetch   # instruction address misaligned
 	j       trap_other             # 其他异常，直接终止
 
-;=======================
-; 处理 misaligned load (lw) 补丁
+
 handle_load:
 	# 从 mepc 取得触发异常的 lw 指令
 	csrr    t0, mepc
@@ -239,8 +238,7 @@ skip_load_patch:
 	csrw    mepc, t0
 	j       common_restore
 
-;=======================
-; 处理 misaligned store (sw) 补丁
+
 handle_store:
 	csrr    t0, mepc
 	lw      t1, 0(t0)
@@ -298,8 +296,7 @@ do_store_patch:
 	csrw    mepc, t0
 	j       common_restore
 
-;=======================
-; 处理取指不对齐（bad jump）补丁：对 instruction fetch misaligned (mcause==0)
+
 handle_fetch:
 	csrr    t0, mtval         # 取故障取指地址
 	lbu     t1, 0(t0)
@@ -323,15 +320,13 @@ handle_fetch:
 	csrw    mepc, t0
 	j       common_restore
 
-;=======================
-; 其他异常，直接恢复现场后跳转至 terminate（terminate 在 utils.s 中定义）
+
 trap_other:
 	addi    sp, sp, 120
 	csrrw   sp, mscratch, sp
 	j       terminate
 
-;=======================
-; 恢复保存的寄存器并返回用户模式
+
 common_restore:
 	lw      ra,   0(sp)
 	lw      gp,   4(sp)
