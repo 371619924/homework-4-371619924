@@ -108,8 +108,8 @@ __mtrap:
     # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
 
-    # 2. 保存所有寄存器 (扩展保存范围)
-    addi sp, sp, -128
+    # 2. 保存所有寄存器
+    addi sp, sp, -72
     sw ra, 0(sp)
     sw t0, 4(sp)
     sw t1, 8(sp)
@@ -128,87 +128,92 @@ __mtrap:
     sw a7, 60(sp)
     sw s0, 64(sp)
     sw s1, 68(sp)
-    sw s2, 72(sp)
-    sw s3, 76(sp)
-    sw s4, 80(sp)
-    sw s5, 84(sp)
-    sw s6, 88(sp)
-    sw s7, 92(sp)
-    sw s8, 96(sp)
-    sw s9, 100(sp)
-    sw s10, 104(sp)
-    sw s11, 108(sp)
 
     # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, check_other_exceptions  # 不是 Misaligned Load，检查其他异常
+    bne t0, t1, terminate   # 不是 Misaligned Load，跳到 terminate
 
-handle_misaligned_load:
-    # 4. 读取 mepc 处的指令
-    csrr t0, mepc            # t0 = mepc 地址
-    lhu t1, 0(t0)            # 读取低 16 位
-    lhu t2, 2(t0)            # 读取高 16 位
-    slli t2, t2, 16
-    or t1, t1, t2            # 合并完整指令到 t1
+    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
+    csrr t0, mepc           
+    lw t1, 0(t0)            
 
     # 5. 检查是否 lw (opcode 0x00002003)
     li t2, 0x00002003       
     and t3, t1, t2
-    bne t3, t2, check_other_exceptions  # 不是 lw，继续检查其他异常
+    bne t3, t2, terminate   # 不是 lw，跳到 terminate
 
     # 6. 获取未对齐的地址
     csrr t4, mtval
 
     # 7. 解析 lw 目标寄存器 (rd)
     srli t5, t1, 7            
-    andi t5, t5, 0x1F        
+    andi t5, t5, 0x1F        # t5 现在是 rd 的编号
 
-    # 8. **修正 `lbu` 读取顺序（确保 Little-Endian 规范）**
-    lbu t6, 0(t4)  # 读取最低字节（offset 0）
-    lbu t3, 1(t4)  # 读取次低字节（offset 1）
+    # 8. 修正 lbu 读取顺序（小端序）
+    lbu t6, 0(t4)            # 最低地址的字节 -> 最低8位
+    lbu t3, 1(t4)
     slli t3, t3, 8
     or t6, t6, t3
-
-    lbu t3, 2(t4)  # 读取次高字节（offset 2）
+    lbu t3, 2(t4)
     slli t3, t3, 16
     or t6, t6, t3
-
-    lbu t3, 3(t4)  # 读取最高字节（offset 3）
+    lbu t3, 3(t4)
     slli t3, t3, 24
-    or t6, t6, t3
+    or t6, t6, t3            # t6 包含组合后的32位值
 
-    # 9. **修正存储 (确保 rd 对齐)**
-    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
-    addi t3, sp, 32
-    add t3, t3, t5
-    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
+    # 9. 根据 rd 编号计算正确的栈偏移并存储
+    # t5: rd 编号，根据保存位置计算偏移量
+    li t3, 1
+    beq t5, t3, 1f           # 处理 x1 (ra)
+    li t3, 5
+    blt t5, t3, invalid_rd   # rd <5 且不是 x1，无效
+    li t3, 8
+    blt t5, t3, 2f           # 处理 x5-x7 (t0-t2)
+    li t3, 28
+    blt t5, t3, 3f           # 处理 x8-x9 或 x10-x17
+    li t3, 32
+    blt t5, t3, 4f           # 处理 x28-x31 (t3-t6)
+    j invalid_rd
 
-    # 10. 跳过错误指令
-    addi t0, t0, 4
-    csrw mepc, t0
-    j restore_registers  # 直接恢复寄存器并返回
+1:  # x1 (ra) 偏移 0
+    li t3, 0
+    j 9f
+2:  # x5-x7 (t0-t2) 偏移 4 + (rd-5)*4
+    addi t5, t5, -5
+    slli t3, t5, 2
+    addi t3, t3, 4
+    j 9f
+3:  # 检查是 x8-x9 (s0-s1) 还是 x10-x17 (a0-a7)
+    li t3, 10
+    blt t5, t3, 5f           # x8-x9
+    # x10-x17 (a0-a7) 偏移 32 + (rd-10)*4
+    addi t5, t5, -10
+    slli t3, t5, 2
+    addi t3, t3, 32
+    j 9f
+4:  # x28-x31 (t3-t6) 偏移 16 + (rd-28)*4
+    addi t5, t5, -28
+    slli t3, t5, 2
+    addi t3, t3, 16
+    j 9f
+5:  # x8-x9 (s0-s1) 偏移 64 + (rd-8)*4
+    addi t5, t5, -8
+    slli t3, t5, 2
+    addi t3, t3, 64
 
-check_other_exceptions:
-    # 处理其他异常情况
-    li t1, 8
-    beq t0, t1, handle_ecall  # 如果是 ECALL 例外，单独处理
+9:  # 存储到正确位置
+    add t3, sp, t3
+    sw t6, 0(t3)
+    j 10f
+
+invalid_rd:
     j terminate
 
-handle_ecall:
-    # 处理 ecall 例外
+10: # 10. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
-    j restore_registers
 
-terminate:
-    # 触发 panic
-    li a0, 0
-    li a1, 0
-    li a7, 93
-    ecall
-
-restore_registers:
     # 11. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
@@ -228,24 +233,16 @@ restore_registers:
     lw a7, 60(sp)
     lw s0, 64(sp)
     lw s1, 68(sp)
-    lw s2, 72(sp)
-    lw s3, 76(sp)
-    lw s4, 80(sp)
-    lw s5, 84(sp)
-    lw s6, 88(sp)
-    lw s7, 92(sp)
-    lw s8, 96(sp)
-    lw s9, 100(sp)
-    lw s10, 104(sp)
-    lw s11, 108(sp)
 
     # 12. 释放栈空间并恢复 sp
-    addi sp, sp, 128
+    addi sp, sp, 72
     csrrw sp, mscratch, sp
 
     # 13. 继续执行程序
     mret
 
+terminate:
+    # 终止处理（省略具体代码）
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
