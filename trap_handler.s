@@ -242,10 +242,6 @@ restore_registers:
     # 13. 继续执行程序
     mret  
 
-terminate:
-    li a0, 0  # 终止程序
-    ebreak
-
 
 	
 	
