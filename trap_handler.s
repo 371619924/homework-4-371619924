@@ -129,117 +129,56 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause，检查是否是 Misaligned Load / Store 或 Load access fault
+    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
     csrr t0, mcause
-    li t1, 4   # Misaligned Load Address
-    li t2, 6   # Misaligned Store Address
-    li t3, 5   # Load Access Fault
-    li t4, 7   # Store Access Fault
-    beq t0, t1, handle_misaligned_load
-    beq t0, t2, handle_misaligned_store
-    beq t0, t3, handle_load_access_fault
-    beq t0, t4, handle_store_access_fault
+    li t1, 4
+    bne t0, t1, terminate  # 不是 Misaligned Load，直接跳到 terminate
 
-    # 其他异常，终止
-    j terminate
-
-handle_misaligned_load:
-    csrr t4, mtval  # 获取未对齐地址
-    beqz t4, terminate  # mtval 不能是 0，否则终止
-
-    # 解析指令
+    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
     csrr t0, mepc
-    lhu t1, 0(t0)   
-    lhu t2, 2(t0)
+    lhu t1, 0(t0)  # 低16位
+    lhu t2, 2(t0)  # 高16位
     slli t2, t2, 16
-    or t1, t1, t2
+    or t1, t1, t2  # 组合完整指令
 
-    # 确保是 `lw` 指令
+    # 5. 检查是否 lw (opcode 0x03)
     andi t3, t1, 0x7F
     li t4, 0x03
-    bne t3, t4, terminate
+    bne t3, t4, terminate  # 不是 lw，跳到 terminate
 
-    # 解析 rd
-    srli t5, t1, 7  
-    andi t5, t5, 0x1F
+    # 6. 获取未对齐的地址
+    csrr t4, mtval  
 
-    # 检查 mtval 是否是合法地址
-    bgeu t4, zero, load_ok
-    j terminate
-load_ok:
+    # 7. 解析 lw 目标寄存器 (rd)
+    srli t5, t1, 7
+    andi t5, t5, 0x1F  
 
-    # 逐字节读取
-    lbu t3, 0(t4)   
-    lbu t6, 1(t4)
-    slli t6, t6, 8
-    or t3, t3, t6
-    lbu t6, 2(t4)
-    slli t6, t6, 16
-    or t3, t3, t6
-    lbu t6, 3(t4)
-    slli t6, t6, 24
-    or t3, t3, t6
+    # 8. **确保 mtval 非 0，避免访问无效地址**
+    beqz t4, terminate
 
-    # 存入 rd
-    sw t3, 32(sp)  
+    # 9. **修正 `lbu` 读取顺序（确保 Little-Endian 规范）**
+    lbu t6, 0(t4)  # 读取最低字节（offset 0）
+    lbu t3, 1(t4)  
+    slli t3, t3, 8
+    or t6, t6, t3
+    lbu t3, 2(t4)  
+    slli t3, t3, 16
+    or t6, t6, t3
+    lbu t3, 3(t4)  
+    slli t3, t3, 24
+    or t6, t6, t3
 
-    # 跳过错误指令
+    # 10. **修正存储 (确保 rd 对齐)**
+    slli t5, t5, 2  
+    addi t3, sp, 32
+    add t3, t3, t5
+    sw t6, 0(t3)  
+
+    # 11. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
-    j restore_registers
 
-handle_misaligned_store:
-    csrr t4, mtval
-    beqz t4, terminate  
-
-    # 解析指令
-    csrr t0, mepc
-    lhu t1, 0(t0)   
-    lhu t2, 2(t0)
-    slli t2, t2, 16
-    or t1, t1, t2
-
-    # 确保是 `sw` 指令
-    andi t3, t1, 0x7F
-    li t4, 0x23
-    bne t3, t4, terminate  
-
-    # 解析 rs2
-    srli t5, t1, 20  
-    andi t5, t5, 0x1F
-
-    # 读取 rs2 值
-    lw t3, 32(sp)  
-
-    # 逐字节存储
-    sb t3, 0(t4)
-    srli t3, t3, 8
-    sb t3, 1(t4)
-    srli t3, t3, 8
-    sb t3, 2(t4)
-    srli t3, t3, 8
-    sb t3, 3(t4)
-
-    # 跳过错误指令
-    addi t0, t0, 4
-    csrw mepc, t0
-    j restore_registers
-
-handle_load_access_fault:
-    csrr t4, mtval
-    beqz t4, terminate  
-
-    # 记录错误并终止
-    j terminate
-
-handle_store_access_fault:
-    csrr t4, mtval
-    beqz t4, terminate  
-
-    # 记录错误并终止
-    j terminate
-
-restore_registers:
+    # 12. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
     lw t1, 8(sp)
@@ -258,9 +197,15 @@ restore_registers:
     lw a7, 60(sp)
     lw s0, 64(sp)
     lw s1, 68(sp)
+
+    # 13. 释放栈空间并恢复 sp
     addi sp, sp, 72
     csrrw sp, mscratch, sp
+
+    # 14. 继续执行程序
     mret
+
+
 
 
 
