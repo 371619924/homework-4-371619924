@@ -145,12 +145,12 @@ __mtrap:
     bne     t3, t4, trap_unhandled
     csrr    t5, mepc
     lw      t6, 0(t5)
-    andi    t7, t6, 0x7F
-    li      t0, 0x03
+    andi    t7, t6, 127
+    li      t0, 3
     bne     t7, t0, trap_unhandled
     srli    t7, t6, 12
-    andi    t7, t7, 0x7
-    li      t0, 0x2
+    andi    t7, t7, 7
+    li      t0, 2
     bne     t7, t0, trap_unhandled
     csrr    t8, mtval
     lbu     t9, 0(t8)
@@ -164,7 +164,7 @@ __mtrap:
     or      t9, t9, t11
     or      t9, t9, t12
     srli    t7, t6, 7
-    andi    t7, t7, 0x1F
+    andi    t7, t7, 31
     beqz    t7, misaligned_done
     li      t0, 2
     beq     t7, t0, update_x2
@@ -217,7 +217,6 @@ misaligned_done:
 trap_unhandled:
     addi    sp, sp, 124
     j       terminate
-
 
 	
 	
