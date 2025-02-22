@@ -105,7 +105,10 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
+    # 1. Swap sp and mscratch so sp points to kernel stack
     csrrw sp, mscratch, sp  
+
+    # 2. Save all registers (72 bytes total)
     addi sp, sp, -72
     sw ra, 0(sp)
     sw t0, 4(sp)
@@ -126,31 +129,28 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 读取 mcause
+    # 3. Read mcause and check for misaligned load (4) or store (6)
     csrr t0, mcause
-    li t1, 4   # Misaligned Load Address
-    li t2, 6   # Misaligned Store Address
+    li t1, 4      # Misaligned Load Address
+    li t2, 6      # Misaligned Store Address
     beq t0, t1, handle_misaligned_load
     beq t0, t2, handle_misaligned_store
 
-    # 其他异常，终止
+    # Other exceptions: jump to terminate routine
     j terminate
 
 handle_misaligned_load:
-    csrr t4, mtval  # 获取未对齐地址
-    beqz t4, terminate  # 如果 mtval 是 0x00000000，说明访问了 NULL，直接终止
+    csrr t4, mtval         # t4 = misaligned address
+    beqz t4, terminate
 
-    csrr t0, mepc   # 取指令地址
-    lw t1, 0(t0)    # 读取指令
-    li t2, 0x00002003
+    csrr t0, mepc          # get faulting instruction address
+    lw t1, 0(t0)           # fetch faulting instruction
+    li t2, 0x00002003      # constant for lw (opcode 0x03 with proper funct3 bits)
     and t3, t1, t2
-    bne t3, t2, terminate  # 不是 `lw`，终止
+    bne t3, t2, terminate  # if not an lw, terminate
 
-    srli t5, t1, 7  # 解析 rd
-    andi t5, t5, 0x1F
-
-    # 逐字节读取并重组
-    lbu t3, 0(t4)   
+    # Emulate lw by reading four bytes (little-endian)
+    lbu t3, 0(t4)
     lbu t6, 1(t4)
     slli t6, t6, 8
     or t3, t3, t6
@@ -161,52 +161,55 @@ handle_misaligned_load:
     slli t6, t6, 24
     or t3, t3, t6
 
-    # 存入 rd
-    addi t5, t5, 32
-    add t5, sp, t5
-    sw t3, 0(t5)
-
-    # 跳过错误指令
+    # Extract destination register (rd) from instruction (bits 11:7)
+    srli t5, t1, 7
+    andi t5, t5, 0x1F
+    bnez t5, patch_load_rd   # if rd != x0, patch the saved register
+    j skip_patch_load        # if rd == 0, do nothing
+patch_load_rd:
+    la t7, load_table        # t7 = address of lookup table
+    slli t5, t5, 2           # multiply register number by 4 (word offset)
+    add t7, t7, t5           # t7 now points to the proper offset in the table
+    sw t3, 0(t7)           # write the emulated load result into the trap frame
+skip_patch_load:
     csrr t0, mepc
-    addi t0, t0, 4
+    addi t0, t0, 4         # skip over the faulting instruction
     csrw mepc, t0
     j restore_registers
 
 handle_misaligned_store:
-    csrr t4, mtval  # 获取未对齐地址
-    beqz t4, terminate  # 如果 mtval 是 0x00000000，说明访问了 NULL，直接终止
+    csrr t4, mtval         # t4 = misaligned effective address
+    beqz t4, terminate
 
-    csrr t0, mepc   # 取指令地址
-    lw t1, 0(t0)    # 读取指令
-    li t2, 0x00002023
-    and t3, t1, t2
-    bne t3, t2, terminate  # 不是 `sw`，终止
-
-    srli t6, t1, 15 # 解析 rs1
-    andi t6, t6, 0x1F
-    srli t5, t1, 20 # 解析 rs2
-    andi t5, t5, 0x1F
-
-    # 计算存储地址
-    add t6, t6, t4  # rs1 + 偏移
-
-    # 获取 rs2 的值
-    addi t5, t5, 32
-    add t5, sp, t5
-    lw t3, 0(t5)
-
-    # 逐字节存储
-    sb t3, 0(t6)
-    srli t3, t3, 8
-    sb t3, 1(t6)
-    srli t3, t3, 8
-    sb t3, 2(t6)
-    srli t3, t3, 8
-    sb t3, 3(t6)
-
-    # 跳过错误指令
     csrr t0, mepc
-    addi t0, t0, 4
+    lw t1, 0(t0)           # fetch faulting instruction
+    li t2, 0x00002023      # constant for sw (opcode 0x23 with proper funct3 bits)
+    and t3, t1, t2
+    bne t3, t2, terminate  # if not an sw, terminate
+
+    # Extract rs2 (source register for store) from instruction (bits 24:20)
+    srli t5, t1, 20
+    andi t5, t5, 0x1F
+    beqz t5, load_zero_for_store  # if rs2 is x0, use 0
+    la t7, load_table        # use same table for lookup
+    slli t5, t5, 2
+    add t7, t7, t5
+    lw t3, 0(t7)           # t3 now holds the value to be stored
+    j store_value
+load_zero_for_store:
+    li t3, 0
+store_value:
+    # Emulate sw by storing the word byte-by-byte (little-endian)
+    sb t3, 0(t4)
+    srli t3, t3, 8
+    sb t3, 1(t4)
+    srli t3, t3, 8
+    sb t3, 2(t4)
+    srli t3, t3, 8
+    sb t3, 3(t4)
+    
+    csrr t0, mepc
+    addi t0, t0, 4         # advance past the faulting instruction
     csrw mepc, t0
     j restore_registers
 
@@ -232,6 +235,44 @@ restore_registers:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
+
+    .align 2
+load_table:
+    # Table mapping register number -> offset in saved trap frame
+    # (only registers that were saved are nonzero; writes to x0 are ignored)
+    .word 0      #  x0 (not saved)
+    .word 0      #  x1 (ra)  offset 0
+    .word 0      #  x2 (not saved)
+    .word 0      #  x3 (not saved)
+    .word 0      #  x4 (not saved)
+    .word 4      #  x5 (t0)  offset 4
+    .word 8      #  x6 (t1)  offset 8
+    .word 12     #  x7 (t2)  offset 12
+    .word 64     #  x8 (s0)  offset 64
+    .word 68     #  x9 (s1)  offset 68
+    .word 32     #  x10 (a0) offset 32
+    .word 36     #  x11 (a1) offset 36
+    .word 40     #  x12 (a2) offset 40
+    .word 44     #  x13 (a3) offset 44
+    .word 48     #  x14 (a4) offset 48
+    .word 52     #  x15 (a5) offset 52
+    .word 56     #  x16 (a6) offset 56
+    .word 60     #  x17 (a7) offset 60
+    .word 0      #  x18 (not saved)
+    .word 0      #  x19 (not saved)
+    .word 0      #  x20 (not saved)
+    .word 0      #  x21 (not saved)
+    .word 0      #  x22 (not saved)
+    .word 0      #  x23 (not saved)
+    .word 0      #  x24 (not saved)
+    .word 0      #  x25 (not saved)
+    .word 0      #  x26 (not saved)
+    .word 0      #  x27 (not saved)
+    .word 16     #  x28 (t3)  offset 16
+    .word 20     #  x29 (t4)  offset 20
+    .word 24     #  x30 (t5)  offset 24
+    .word 28     #  x31 (t6)  offset 28
+
 
 
 # This code is taken from the default VRV system code.  It prints out
