@@ -130,23 +130,26 @@ __mstart:
 
 	
   	
-    .globl __mtrap
+     .globl __mtrap
 __mtrap:
-    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    # 交换 sp 与 mscratch：让 sp 变为内核栈指针，mscratch 保存用户 sp
     csrrw   sp, mscratch, sp
+    # 先检查异常类型
+    csrr    t0, mcause
+    li      t1, 4
+    bne     t0, t1, trap_other_no_save  # 非 misaligned lw 异常
 
-    # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 30×4 = 120 字节
+    # misaligned lw 异常处理：在内核栈上保存所有寄存器
     addi    sp, sp, -120
-
-    # 按要求保存寄存器，顺序：x1, x3, x4, x5, x6, x7, x8, x9, x10, …, x31
-    sw      ra,   0(sp)      # x1 (ra)
-    sw      gp,   4(sp)      # x3 (gp)
-    sw      tp,   8(sp)      # x4 (tp)
-    sw      t0,  12(sp)      # x5 (t0)
-    sw      t1,  16(sp)      # x6 (t1)
-    sw      t2,  20(sp)      # x7 (t2)
-    sw      s0,  24(sp)      # x8 (s0)
-    sw      s1,  28(sp)      # x9 (s1)
+    # 保存顺序必须严格为：x1, x3, x4, x5, …, x31 共30个寄存器
+    sw      ra,   0(sp)      # x1  (ra)
+    sw      gp,   4(sp)      # x3  (gp)
+    sw      tp,   8(sp)      # x4  (tp)
+    sw      t0,  12(sp)      # x5  (t0)
+    sw      t1,  16(sp)      # x6  (t1) – t1此时仅用于保存数值，可覆盖
+    sw      t2,  20(sp)      # x7  (t2)
+    sw      s0,  24(sp)      # x8  (s0)
+    sw      s1,  28(sp)      # x9  (s1)
     sw      a0,  32(sp)      # x10 (a0)
     sw      a1,  36(sp)      # x11 (a1)
     sw      a2,  40(sp)      # x12 (a2)
@@ -170,32 +173,25 @@ __mtrap:
     sw      t5,112(sp)       # x30 (t5)
     sw      t6,116(sp)       # x31 (t6)
 
-    # 检查异常类型：misaligned load 异常应为 mcause == 4
-    csrr    t0, mcause
-    li      t1, 4
-    bne     t0, t1, trap_other
-
-    # 取得触发异常的 lw 指令地址与指令字
-    csrr    t0, mepc         # t0 = 出错指令地址
-    lw      t1, 0(t0)        # t1 = 指令字
-
-    # 检查 opcode（低 7 位）是否为 0x03（load 指令）
+    # 取得出错指令地址与指令字
+    csrr    t0, mepc         # t0 = faulting instruction address
+    lw      t1, 0(t0)        # t1 = instruction word
+    # 检查 opcode（低 7 位）是否为 0x03 (load)
     andi    t2, t1, 0x7F
     li      t3, 0x03
-    bne     t2, t3, trap_other
-
-    # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+    bne     t2, t3, patch_fail
+    # 检查 funct3（位 14:12）是否为 0x2 (lw)
     srai    t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
-    bne     t2, t3, trap_other
-
+    bne     t2, t3, patch_fail
     # 提取目标寄存器号 rd（位 11:7）
     srai    t4, t1, 7
-    andi    t4, t4, 0x1F   # t4 = rd
-    beq     t4, zero, trap_other    # 若 rd 为 0，不补丁
+    andi    t4, t4, 0x1F
+    beq     t4, zero, patch_fail   # rd==0 无补丁意义
     li      t2, 2
-    beq     t4, t2, trap_other      # 若 rd 为 sp (x2)，不处理
+    beq     t4, t2, patch_fail     # 不处理 sp (x2)
+    # 对于 rd==1，补丁偏移为 0；否则偏移 = (rd-2)*4
     li      t2, 1
     beq     t4, t2, update_offset
     addi    t2, t4, -2
@@ -204,36 +200,32 @@ __mtrap:
 update_offset:
     li      t2, 0
 done_offset:
-    add     t2, sp, t2     # t2 指向 trap frame 中目标寄存器槽
-    mv      a7, t2         # 保存该地址到 a7（后续用于写入补丁数据）
+    add     t2, sp, t2       # t2 指向 trap frame 内对应目标寄存器槽
+    mv      a7, t2           # 保存到 a7，后续用来写入修补数据
 
-    # 重构 misaligned load 数据：
-    # 直接从 mtval（出错的有效地址）加载连续 4 个字节
-    csrr    t5, mtval      # t5 = mtval（应为 lw 指令失配的地址，如 s0+2）
-    lbu     t6, 0(t5)      # 加载字节0
+    # 利用 mtval 指向的地址连续加载 4 个字节重构数据
+    csrr    t5, mtval        # t5 = faulting memory address（实际有效地址）
+    lbu     t6, 0(t5)        # 加载字节0
     addi    t0, t5, 1
-    lbu     t1, 0(t0)      # 加载字节1
+    lbu     t1, 0(t0)        # 加载字节1
     addi    t0, t5, 2
-    lbu     t2, 0(t0)      # 加载字节2
+    lbu     t2, 0(t0)        # 加载字节2
     addi    t0, t5, 3
-    lbu     t3, 0(t0)      # 加载字节3
-
+    lbu     t3, 0(t0)        # 加载字节3
     slli    t1, t1, 8
     slli    t2, t2, 16
     slli    t3, t3, 24
     or      t6, t6, t1
     or      t6, t6, t2
     or      t6, t6, t3
+    sw      t6, 0(a7)        # 将重构的数据写入目标寄存器保存槽
 
-    # 将重构数据写入 trap frame 中对应目标寄存器位置
-    sw      t6, 0(a7)
-
-    # 更新 mepc（跳过出错指令 4 字节）
+    # 更新 mepc，跳过出错指令（+4字节）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 按保存顺序恢复寄存器
+    # 恢复所有寄存器（顺序必须与保存时一致）
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -265,16 +257,19 @@ done_offset:
     lw      t5,112(sp)
     lw      t6,116(sp)
     addi    sp, sp, 120
-
-    # 恢复用户 sp：将 mscratch 中的值换回 sp
-    csrrw   sp, mscratch, sp
-
+    csrrw   sp, mscratch, sp   # 恢复用户 sp
     mret
 
-trap_other:
+patch_fail:
+    # 如果出错指令不是 misaligned lw，则放弃修补，恢复用户 sp 后转到默认终止例程
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
+trap_other_no_save:
+    csrrw   sp, mscratch, sp
+    j       terminate
+
 
 
 # This code is taken from the default VRV system code. It prints out
