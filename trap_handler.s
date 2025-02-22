@@ -144,12 +144,18 @@ handle_misaligned_load:
     beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
 
     csrr t0, mepc   # 取指令地址
-    lw t1, 0(t0)    # 读取指令
-    li t2, 0x00002003
-    and t3, t1, t2
-    bne t3, t2, terminate  # 不是 `lw`，终止
+    lhu t1, 0(t0)    # 读取指令低 16 位
+    lhu t2, 2(t0)    # 读取指令高 16 位
+    slli t2, t2, 16
+    or t1, t1, t2    # 组合指令
 
-    srli t5, t1, 7  # 解析 rd
+    # 确保是 `lw` 指令 (opcode = 0x03)
+    andi t3, t1, 0x7F
+    li t4, 0x03
+    bne t3, t4, terminate  # 不是 `lw`，终止
+
+    # 解析 rd
+    srli t5, t1, 7  
     andi t5, t5, 0x1F
 
     # 逐字节读取并重组（Little-Endian）
@@ -165,12 +171,9 @@ handle_misaligned_load:
     or t3, t3, t6
 
     # 存入 rd
-    addi t5, t5, 32
-    add t5, sp, t5
-    sw t3, 0(t5)
+    sw t3, 32(sp)  # 将结果存入 a0 对应位置
 
     # 跳过错误指令
-    csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
     j restore_registers
@@ -180,35 +183,33 @@ handle_misaligned_store:
     beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
 
     csrr t0, mepc   # 取指令地址
-    lw t1, 0(t0)    # 读取指令
-    li t2, 0x00002023
-    and t3, t1, t2
-    bne t3, t2, terminate  # 不是 `sw`，终止
+    lhu t1, 0(t0)    # 读取指令低 16 位
+    lhu t2, 2(t0)    # 读取指令高 16 位
+    slli t2, t2, 16
+    or t1, t1, t2    # 组合指令
 
-    srli t6, t1, 15 # 解析 rs1
-    andi t6, t6, 0x1F
-    srli t5, t1, 20 # 解析 rs2
+    # 确保是 `sw` 指令 (opcode = 0x23)
+    andi t3, t1, 0x7F
+    li t4, 0x23
+    bne t3, t4, terminate  # 不是 `sw`，终止
+
+    # 解析 rs2
+    srli t5, t1, 20  
     andi t5, t5, 0x1F
 
-    # 计算存储地址
-    add t6, t6, t4  # rs1 + 偏移
-
     # 获取 rs2 的值
-    addi t5, t5, 32
-    add t5, sp, t5
-    lw t3, 0(t5)
+    lw t3, 32(sp)  
 
     # 逐字节存储（Little-Endian）
-    sb t3, 0(t6)
+    sb t3, 0(t4)
     srli t3, t3, 8
-    sb t3, 1(t6)
+    sb t3, 1(t4)
     srli t3, t3, 8
-    sb t3, 2(t6)
+    sb t3, 2(t4)
     srli t3, t3, 8
-    sb t3, 3(t6)
+    sb t3, 3(t4)
 
     # 跳过错误指令
-    csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
     j restore_registers
@@ -235,6 +236,7 @@ restore_registers:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
+
 
 
 
