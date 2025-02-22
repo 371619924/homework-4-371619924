@@ -138,45 +138,46 @@ __mtrap:
     csrr t0, mepc           
     lw t1, 0(t0)            
 
-    # 检查指令是否是 lw (opcode 0x00002003)
+    # 5. 检查是否 lw (opcode 0x00002003)
     li t2, 0x00002003       
     and t3, t1, t2
-    bne t3, t2, terminate   # 如果不是 lw，跳转 terminate
+    bne t3, t2, terminate   # 不是 lw，跳到 terminate
 
-    # 5. 获取未对齐的地址
+    # 6. 获取未对齐的地址
     csrr t4, mtval
 
-    # 6. 解析 lw 目标寄存器 (rd)
+    # 7. 解析 lw 目标寄存器 (rd)
     srli t5, t1, 7            
     andi t5, t5, 0x1F        
 
-    # 7. 逐字节读取数据（**修正 `lb` 为 `lhu`，VRV 兼容**）
-    lbu t6, 0(t4)   # 读取第 1 字节
-    addi t3, t4, 1  # 手动计算偏移
-    lbu t4, 0(t3)   # 读取第 2 字节
+    # 8. 逐字节读取数据
+    lbu t6, 0(t4)   
+    addi t3, t4, 1  
+    lbu t4, 0(t3)  
     slli t4, t4, 8
     or t6, t6, t4
 
-    addi t3, t3, 1  # 计算下一个字节偏移
-    lbu t4, 0(t3)   # 读取第 3 字节
+    addi t3, t3, 1  
+    lbu t4, 0(t3)  
     slli t4, t4, 16
     or t6, t6, t4
 
-    addi t3, t3, 1  # 计算下一个字节偏移
-    lbu t4, 0(t3)   # 读取第 4 字节
+    addi t3, t3, 1  
+    lbu t4, 0(t3)  
     slli t4, t4, 24
     or t6, t6, t4
 
-    # 8. 将修正后的数据存入 rd 对应的寄存器
+    # 9. **修正存储 (确保 rd 对齐)**
+    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
     addi t3, sp, 32
     add t3, t3, t5
-    sw t6, 0(t3)
+    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
 
-    # 9. 跳过错误指令
+    # 10. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 10. 恢复所有寄存器
+    # 11. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
     lw t1, 8(sp)
@@ -196,13 +197,12 @@ __mtrap:
     lw s0, 64(sp)
     lw s1, 68(sp)
 
-    # 11. 释放栈空间并恢复 sp
+    # 12. 释放栈空间并恢复 sp
     addi sp, sp, 72
     csrrw sp, mscratch, sp
 
-    # 12. 继续执行程序
+    # 13. 继续执行程序
     mret
-
 
     
 
