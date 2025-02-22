@@ -104,91 +104,117 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
     
-__mtrap:
-    csrrw sp, mscratch, sp  
+___mtrap:
+   
+    csrrw sp, mscratch, sp
+
+   
     addi sp, sp, -72
-    sw ra, 0(sp)
-    sw t0, 4(sp)
-    sw t1, 8(sp)
-    sw t2, 12(sp)
-    sw t3, 16(sp)
-    sw t4, 20(sp)
-    sw t5, 24(sp)
-    sw t6, 28(sp)
-    sw a0, 32(sp)
-    sw a1, 36(sp)
-    sw a2, 40(sp)
-    sw a3, 44(sp)
-    sw a4, 48(sp)
-    sw a5, 52(sp)
-    sw a6, 56(sp)
-    sw a7, 60(sp)
-    sw s0, 64(sp)
-    sw s1, 68(sp)
+    sw ra,   0(sp)
+    sw t0,   4(sp)
+    sw t1,   8(sp)
+    sw t2,  12(sp)
+    sw t3,  16(sp)
+    sw t4,  20(sp)
+    sw t5,  24(sp)
+    sw t6,  28(sp)
+    sw a0,  32(sp)
+    sw a1,  36(sp)
+    sw a2,  40(sp)
+    sw a3,  44(sp)
+    sw a4,  48(sp)
+    sw a5,  52(sp)
+    sw a6,  56(sp)
+    sw a7,  60(sp)
+    sw s0,  64(sp)
+    sw s1,  68(sp)
+
+ 
 
     csrr t0, mcause
-    li t1, 4
-    bne t0, t1, terminate
+    li   t1, 4
+    bne  t0, t1, terminate
 
+ 
     csrr t0, mepc
-    lw t1, 0(t0)
-    li t2, 0x00002003
-    and t3, t1, t2
-    bne t3, t2, terminate
+    lw   t1, 0(t0)       # t1 = instruction bits
 
-    csrr t4, mtval          # t4 = mtval, in our test this equals the base register s0
-    # ===== 新增代码：提取 lw 指令的立即数（偏移量） =====
-    srai t7, t1, 20         # t7 = lw立即数（符号扩展），例如 lw a0, 2(s0) 的偏移为 2
-    add t4, t4, t7          # t4 = mtval + offset，即有效地址 = s0 + 2
-    # ===== 结束新增代码 =====
+    # opcode in bits [6:0], for lw is 0000011 (0x03).
+    # But a more direct check is:  if (instr & 0x0000707f)==0x00000003
+    # or we can do the simpler:
+    li   t2, 0x00002003   # mask = 0x00002003
+    and  t3, t1, t2
+    bne  t3, t2, terminate
 
-    srli t5, t1, 7
-    andi t5, t5, 0x1F
 
-    # 按小端序读取 4 个字节（低地址为低字节）
-    lbu t6, 0(t4)           # 读取最低字节
-    lbu t3, 1(t4)           
+    srai t6, t1, 20       # shift down so bits [31:20] move to [11:0]
+    slli t6, t6, 20       # shift left 20 => put them in bits [31:12], bits [11:0]=0
+    srai t6, t6, 20       # arithmetic shift right 20 => sign-extend from 12 bits
+
+    # rs1 = bits [19:15]
+    # We'll store that in t2
+    slli t2, t1, 12       # shift left so bits [19:15] go to [31:27]
+    srli t2, t2, 27       # shift right => bottom 5 bits => rs1
+
+    # rd = bits [11:7]
+    slli t5, t1, 20       # shift left 20 => bits [11:7]->[31:27]
+    srli t5, t5, 27       # shift right => bottom 5 bits => rd
+
+
+    jal ra, getReg        # (rs1 in t2, sp has stack pointer)
+    # getReg will return the "value_of_rs1" in t3
+    mv t4, t3             # rename to t4 => baseVal
+
+    add t4, t4, t6        # t4 = baseVal + signExtended(imm)
+
+ 
+    lbu t6, 0(t4)         # byte0 => lowest
+    addi t3, t4, 1
+    lbu t3, 0(t3)         # byte1
     slli t3, t3, 8
-    or t6, t6, t3
+    or   t6, t6, t3
 
-    lbu t3, 2(t4)           # 读取次高字节
+    addi t4, t4, 2        # now t4 = original+2
+    lbu t3, 0(t4)         # byte2
     slli t3, t3, 16
-    or t6, t6, t3
+    or   t6, t6, t3
 
-    lbu t3, 3(t4)           # 读取最高字节
+    addi t4, t4, 1        # now t4 = original+3
+    lbu t3, 0(t4)         # byte3 => highest
     slli t3, t3, 24
-    or t6, t6, t3
+    or   t6, t6, t3
 
-    slli t5, t5, 2         # 计算目标寄存器在保存区域中的偏移 (rd * 4)
-    addi t3, sp, 32
-    add t3, t3, t5
-    sw t6, 0(t3)           # 将修正后的数据存入目标寄存器保存区
+   
+    mv a0, t5   # pass rd in a0
+    mv a1, t6   # pass the value in a1
+    jal ra, putReg
 
     addi t0, t0, 4
     csrw mepc, t0
 
-    lw ra, 0(sp)
-    lw t0, 4(sp)
-    lw t1, 8(sp)
-    lw t2, 12(sp)
-    lw t3, 16(sp)
-    lw t4, 20(sp)
-    lw t5, 24(sp)
-    lw t6, 28(sp)
-    lw a0, 32(sp)
-    lw a1, 36(sp)
-    lw a2, 40(sp)
-    lw a3, 44(sp)
-    lw a4, 48(sp)
-    lw a5, 52(sp)
-    lw a6, 56(sp)
-    lw a7, 60(sp)
-    lw s0, 64(sp)
-    lw s1, 68(sp)
-
+    lw ra,   0(sp)
+    lw t0,   4(sp)
+    lw t1,   8(sp)
+    lw t2,  12(sp)
+    lw t3,  16(sp)
+    lw t4,  20(sp)
+    lw t5,  24(sp)
+    lw t6,  28(sp)
+    lw a0,  32(sp)
+    lw a1,  36(sp)
+    lw a2,  40(sp)
+    lw a3,  44(sp)
+    lw a4,  48(sp)
+    lw a5,  52(sp)
+    lw a6,  56(sp)
+    lw a7,  60(sp)
+    lw s0,  64(sp)
+    lw s1,  68(sp)
     addi sp, sp, 72
+
     csrrw sp, mscratch, sp
     mret
+
 
 
 	
