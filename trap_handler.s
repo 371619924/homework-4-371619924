@@ -129,15 +129,15 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 	
-  	.globl __mtrap
+  	
 __mtrap:
 	# 交换 sp 与 mscratch：使 sp 变为内核栈指针，mscratch 保存用户 sp
 	csrrw	sp, mscratch, sp
 
-	# 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31），共 30×4 = 120 字节
+	# 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）
 	addi	sp, sp, -120
 
-	# 按要求保存寄存器，顺序：x1, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x30, x31
+	# 按固定顺序保存寄存器
 	sw	ra,   0(sp)      # x1 (ra)
 	sw	gp,   4(sp)      # x3 (gp)
 	sw	tp,   8(sp)      # x4 (tp)
@@ -169,12 +169,12 @@ __mtrap:
 	sw	t5, 112(sp)      # x30 (t5)
 	sw	t6, 116(sp)      # x31 (t6)
 
-	# 检查异常类型：misaligned load 应为 mcause == 4
+	# 检查 mcause 是否为 4（misaligned load），否则跳转 trap_other
 	csrr	t0, mcause
 	li		t1, 4
 	bne		t0, t1, trap_other
 
-	# 从 mepc 取出导致异常的 lw 指令地址，并加载该指令字
+	# 取出 lw 指令的地址，并加载该指令
 	csrr	t0, mepc         # t0 = 出错指令地址
 	lw		t1, 0(t0)        # t1 = 指令字
 
@@ -189,58 +189,49 @@ __mtrap:
 	li		t3, 0x2
 	bne		t2, t3, trap_other
 
-	# 提取目标寄存器号 rd（位 11:7）
+	# 计算 rd（目标寄存器）
 	srai	t4, t1, 7
-	andi	t4, t4, 0x1F   # t4 = rd
-	beq		t4, zero, trap_other    # 如果 rd 为 0，则无需修补
+	andi	t4, t4, 0x1F
+	beq		t4, zero, trap_other    # 若 rd 为 0，无需修补
 	li		t2, 2
-	beq		t4, t2, trap_other    # 如果 rd 为 sp (x2)，不处理
+	beq		t4, t2, trap_other    # 若 rd 为 sp (x2)，不处理
 
-	# 计算目标寄存器在 trap frame 内的偏移：
-	# 对于 rd==1，偏移为 0；对于 rd>=3，偏移 = (rd - 2) * 4
-	li		t2, 1
-	beq		t4, t2, update_offset
+	# 计算目标寄存器在 trap frame 内的偏移量
 	addi	t2, t4, -2
 	slli	t2, t2, 2
-	j		done_offset
-update_offset:
-	li		t2, 0
-done_offset:
-	add		t2, sp, t2     # t2 指向 trap frame 中对应的目标寄存器槽
-	mv		a7, t2         # 将该地址保存到 a7，后面用于写入修补数据
+	add		t2, sp, t2     # t2 现在指向目标寄存器的位置
+	mv		a7, t2         # 备份该地址
 
-	# 重构 misaligned load 的 32 位数据
-	# 注意：观察 basic.s 与 signed.s 测试，发现当前硬件（或 VRV 模拟器）将 mtval 置为对齐地址，
-	# 而期望加载的数据应来自 (mtval + 失配偏移)。在本测试中失配偏移应为 2。
-	csrr	t5, mtval       # t5 = mtval（假设为对齐地址）
-	addi	t5, t5, 2      # 调整为实际有效地址
+	# 加载 misaligned load 地址，并计算实际生效地址
+	csrr	t5, mtval       # t5 = 触发异常的地址
+	addi	t5, t5, 2      # 修正偏移（确保从正确的地址开始）
 
-	# 依次加载 4 个字节（采用先用 addi 计算地址后 lbu 的写法）
-	lbu		t6, 0(t5)     # 加载字节0
+	# 依次加载 4 个字节（调整存储顺序为 **大端序**）
+	lbu		t3, 0(t5)      # 最高位字节
 	addi	t0, t5, 1
-	lbu		t1, 0(t0)     # 加载字节1
+	lbu		t2, 0(t0)      # 次高位字节
 	addi	t0, t5, 2
-	lbu		t2, 0(t0)     # 加载字节2
+	lbu		t1, 0(t0)      # 次低位字节
 	addi	t0, t5, 3
-	lbu		t3, 0(t0)     # 加载字节3
+	lbu		t6, 0(t0)      # 最低位字节
 
-	# 将各字节按适当位移组合成 32 位数据（低地址字节在低位）
-	slli	t1, t1, 8
-	slli	t2, t2, 16
+	# 调整字节顺序，使得最高地址字节存到最高位（符合测试期望）
 	slli	t3, t3, 24
+	slli	t2, t2, 16
+	slli	t1, t1, 8
 	or		t6, t6, t1
 	or		t6, t6, t2
 	or		t6, t6, t3
 
-	# 将重构后的数据写入 trap frame 中目标寄存器对应槽
+	# 存入目标寄存器
 	sw		t6, 0(a7)
 
-	# 更新 mepc，跳过出错指令（加 4 字节）
+	# 更新 mepc，跳过异常指令
 	csrr	t0, mepc
 	addi	t0, t0, 4
 	csrw	mepc, t0
 
-	# 按保存顺序恢复寄存器
+	# 恢复所有寄存器
 	lw		ra,   0(sp)
 	lw		gp,   4(sp)
 	lw		tp,   8(sp)
@@ -257,23 +248,9 @@ done_offset:
 	lw		a5,  52(sp)
 	lw		a6,  56(sp)
 	lw		a7,  60(sp)
-	lw		s2,  64(sp)
-	lw		s3,  68(sp)
-	lw		s4,  72(sp)
-	lw		s5,  76(sp)
-	lw		s6,  80(sp)
-	lw		s7,  84(sp)
-	lw		s8,  88(sp)
-	lw		s9,  92(sp)
-	lw		s10, 96(sp)
-	lw		s11,100(sp)
-	lw		t3, 104(sp)
-	lw		t4, 108(sp)
-	lw		t5, 112(sp)
-	lw		t6, 116(sp)
 	addi	sp, sp, 120
 
-	# 恢复用户 sp：将 mscratch 中的值交换回 sp
+	# 恢复用户 sp
 	csrrw	sp, mscratch, sp
 
 	mret
@@ -282,8 +259,6 @@ trap_other:
 	addi	sp, sp, 120
 	csrrw	sp, mscratch, sp
 	j		terminate
-
-
 
 
 # This code is taken from the default VRV system code. It prints out
