@@ -129,16 +129,20 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
+    # 3. 读取 mcause 并检查异常类型
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
+    li t2, 6
+    beq t0, t1, handle_misaligned_load  # 处理 Misaligned Load
+    beq t0, t2, handle_misaligned_store # 处理 Misaligned Store
+    j terminate   # 其他情况直接终止
 
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
+handle_misaligned_load:
+    # 4. 读取 mepc 处的指令
     csrr t0, mepc           
     lw t1, 0(t0)            
 
-    # 5. 检查是否 lw (opcode 0x00002003)
+    # 5. 检查是否是 lw 指令 (opcode 0x00002003)
     li t2, 0x00002003       
     and t3, t1, t2
     bne t3, t2, terminate   # 不是 lw，跳到 terminate
@@ -150,30 +154,67 @@ __mtrap:
     srli t5, t1, 7            
     andi t5, t5, 0x1F        
 
-    # 8. **修正 `lbu` 读取顺序（符合 Little-Endian）**
-    lbu t6, 0(t4)  # 读取最低字节
-    lbu t3, 1(t4)  # 读取次低字节
+    # 8. 修正数据 (Little-Endian 字节重排)
+    lbu t6, 0(t4)  
+    lbu t3, 1(t4)  
     slli t3, t3, 8
     or t6, t6, t3
 
-    lbu t3, 2(t4)  # 读取次高字节
+    lbu t3, 2(t4)  
     slli t3, t3, 16
     or t6, t6, t3
 
-    lbu t3, 3(t4)  # 读取最高字节
+    lbu t3, 3(t4)  
     slli t3, t3, 24
     or t6, t6, t3
 
-    # 9. **修正存储 (确保 rd 对齐)**
-    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
+    # 9. 存入正确的 rd
     addi t3, sp, 32
+    slli t5, t5, 2
     add t3, t3, t5
-    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
+    sw t6, 0(t3)         
 
     # 10. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
+    j restore_registers
 
+handle_misaligned_store:
+    # 处理 Misaligned Store (6) 的情况
+    csrr t4, mtval    # 读取错误地址
+    csrr t0, mepc     # 读取指令地址
+    lw t1, 0(t0)      # 读取指令
+
+    # 确保指令是 sw (opcode 0x00002023)
+    li t2, 0x00002023
+    and t3, t1, t2
+    bne t3, t2, terminate  # 不是 sw 指令，终止
+
+    # 解析目标寄存器 rs2 (存储值)
+    srli t5, t1, 20
+    andi t5, t5, 0x1F
+
+    # 计算存储的值
+    addi t3, sp, 32
+    slli t5, t5, 2
+    add t3, t3, t5
+    lw t6, 0(t3)
+
+    # 按字节存储数据（符合 Little-Endian）
+    sb t6, 0(t4)
+    srli t6, t6, 8
+    sb t6, 1(t4)
+    srli t6, t6, 8
+    sb t6, 2(t4)
+    srli t6, t6, 8
+    sb t6, 3(t4)
+
+    # 跳过错误指令
+    addi t0, t0, 4
+    csrw mepc, t0
+    j restore_registers
+
+restore_registers:
     # 11. 恢复所有寄存器
     lw ra, 0(sp)
     lw t0, 4(sp)
@@ -199,7 +240,11 @@ __mtrap:
     csrrw sp, mscratch, sp
 
     # 13. 继续执行程序
-    mret
+    mret  
+
+terminate:
+    li a0, 0  # 终止程序
+    ebreak
 
 
 	
