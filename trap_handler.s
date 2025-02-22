@@ -108,7 +108,7 @@ __mtrap:
     # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
 
-    # 2. 保存所有寄存器（共 72 字节）
+    # 2. 保存所有寄存器
     addi sp, sp, -72
     sw ra, 0(sp)
     sw t0, 4(sp)
@@ -129,28 +129,31 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause，判断是否是 misaligned load (4) 或 store (6)
+    # 3. 读取 mcause，检查是否是 Misaligned Load 或 Misaligned Store
     csrr t0, mcause
-    li t1, 4      # Misaligned Load Address
-    li t2, 6      # Misaligned Store Address
+    li t1, 4   # Misaligned Load Address
+    li t2, 6   # Misaligned Store Address
     beq t0, t1, handle_misaligned_load
     beq t0, t2, handle_misaligned_store
 
-    # 其他异常，跳转至 terminate
+    # 其他异常，终止
     j terminate
 
 handle_misaligned_load:
-    csrr t4, mtval         # t4 = 未对齐地址
-    beqz t4, terminate
+    csrr t4, mtval  # 获取未对齐地址
+    beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
 
-    csrr t0, mepc          # 获取 faulting 指令地址
-    lw t1, 0(t0)           # 取出出错指令
-    li t2, 0x00002003      # lw 指令标识
+    csrr t0, mepc   # 取指令地址
+    lw t1, 0(t0)    # 读取指令
+    li t2, 0x00002003
     and t3, t1, t2
-    bne t3, t2, terminate  # 如果不是 lw，则终止
+    bne t3, t2, terminate  # 不是 `lw`，终止
 
-    # 模拟 lw：逐字节读取（Little-Endian）
-    lbu t3, 0(t4)
+    srli t5, t1, 7  # 解析 rd
+    andi t5, t5, 0x1F
+
+    # 逐字节读取并重组（Little-Endian）
+    lbu t3, 0(t4)   
     lbu t6, 1(t4)
     slli t6, t6, 8
     or t3, t3, t6
@@ -161,133 +164,52 @@ handle_misaligned_load:
     slli t6, t6, 24
     or t3, t3, t6
 
-    # 提取出错指令的 rd 字段（bits 11:7）
-    srli t5, t1, 7
-    andi t5, t5, 0x1F
-    beqz t5, skip_patch_load  # 如果 rd 为 0，则不需补丁
+    # 存入 rd
+    addi t5, t5, 32
+    add t5, sp, t5
+    sw t3, 0(t5)
 
-    # 计算 rd 对应的偏移（结果存入 t7）
-    # 使用 t5 保存寄存器号，t7 用于存放偏移
-    li t7, 0          # 默认偏移为 0
-    li t8, 1
-    beq t5, t8, done_offset_load  # 若 rd == 1，则 offset = 0
-
-    li t8, 5
-    blt t5, t8, done_offset_load  # 若 rd < 5，则未保存，offset 保持 0
-    li t8, 7
-    ble t5, t8, { 
-        # 对于 x5~x7: offset = (rd - 4) * 4
-        addi t7, t5, -4
-        slli t7, t7, 2
-        j done_offset_load
-    }
-
-    li t8, 10
-    blt t5, t8, done_offset_load  # rd < 10 未保存
-    li t8, 17
-    ble t5, t8, { 
-        # 对于 x10~x17: offset = (rd - 10 + 8) * 4 = (rd - 2) * 4
-        addi t7, t5, -2
-        slli t7, t7, 2
-        j done_offset_load
-    }
-
-    li t8, 28
-    blt t5, t8, done_offset_load  # rd < 28 未保存
-    li t8, 31
-    ble t5, t8, { 
-        # 对于 x28~x31: offset = (rd - 28 + 4) * 4 = (rd - 24) * 4
-        addi t7, t5, -24
-        slli t7, t7, 2
-        j done_offset_load
-    }
-
-    li t8, 8
-    beq t5, t8, { li t7, 64; j done_offset_load }  # x8 (s0)
-    li t8, 9
-    beq t5, t8, { li t7, 68; }                   # x9 (s1)
-
-done_offset_load:
-    add t7, sp, t7        # t7 = sp + computed offset
-    sw t3, 0(t7)          # 将模拟的 load 值写入 trap frame
-
-skip_patch_load:
+    # 跳过错误指令
     csrr t0, mepc
-    addi t0, t0, 4        # 跳过出错指令
+    addi t0, t0, 4
     csrw mepc, t0
     j restore_registers
 
 handle_misaligned_store:
-    csrr t4, mtval         # t4 = 未对齐的有效地址
-    beqz t4, terminate
+    csrr t4, mtval  # 获取未对齐地址
+    beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
 
-    csrr t0, mepc
-    lw t1, 0(t0)           # 取出出错指令
-    li t2, 0x00002023      # sw 指令标识
+    csrr t0, mepc   # 取指令地址
+    lw t1, 0(t0)    # 读取指令
+    li t2, 0x00002023
     and t3, t1, t2
-    bne t3, t2, terminate  # 如果不是 sw，则终止
+    bne t3, t2, terminate  # 不是 `sw`，终止
 
-    # 提取 sw 指令中的 rs2 字段（bits 24:20）
-    srli t5, t1, 20
+    srli t6, t1, 15 # 解析 rs1
+    andi t6, t6, 0x1F
+    srli t5, t1, 20 # 解析 rs2
     andi t5, t5, 0x1F
-    beqz t5, load_zero_for_store  # 若 rs2 为 0，使用 0
 
-    # 计算 rs2 对应的偏移（存入 t7）
-    li t7, 0
-    li t8, 1
-    beq t5, t8, done_offset_store
-    li t8, 5
-    blt t5, t8, done_offset_store
-    li t8, 7
-    ble t5, t8, { 
-        addi t7, t5, -4
-        slli t7, t7, 2
-        j done_offset_store
-    }
+    # 计算存储地址
+    add t6, t6, t4  # rs1 + 偏移
 
-    li t8, 10
-    blt t5, t8, done_offset_store
-    li t8, 17
-    ble t5, t8, { 
-        addi t7, t5, -2
-        slli t7, t7, 2
-        j done_offset_store
-    }
+    # 获取 rs2 的值
+    addi t5, t5, 32
+    add t5, sp, t5
+    lw t3, 0(t5)
 
-    li t8, 28
-    blt t5, t8, done_offset_store
-    li t8, 31
-    ble t5, t8, { 
-        addi t7, t5, -24
-        slli t7, t7, 2
-        j done_offset_store
-    }
-
-    li t8, 8
-    beq t5, t8, { li t7, 64; j done_offset_store }
-    li t8, 9
-    beq t5, t8, { li t7, 68; }
-
-done_offset_store:
-    add t7, sp, t7        # t7 = sp + computed offset
-    lw t3, 0(t7)          # 取出原来保存的值（rs2的值）
-    j store_done
-
-load_zero_for_store:
-    li t3, 0
-
-store_done:
-    # 模拟 sw：逐字节写入（Little-Endian）
-    sb t3, 0(t4)
+    # 逐字节存储（Little-Endian）
+    sb t3, 0(t6)
     srli t3, t3, 8
-    sb t3, 1(t4)
+    sb t3, 1(t6)
     srli t3, t3, 8
-    sb t3, 2(t4)
+    sb t3, 2(t6)
     srli t3, t3, 8
-    sb t3, 3(t4)
-    
+    sb t3, 3(t6)
+
+    # 跳过错误指令
     csrr t0, mepc
-    addi t0, t0, 4        # 跳过出错指令
+    addi t0, t0, 4
     csrw mepc, t0
     j restore_registers
 
@@ -313,6 +235,7 @@ restore_registers:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
+
 
 
 # This code is taken from the default VRV system code.  It prints out
