@@ -105,101 +105,117 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
-    csrrw sp, mscratch, sp  
+    csrrw sp, mscratch, sp       # Swap to kernel stack
+    addi sp, sp, -(31*4)         # Allocate space for x1-x31
 
-    # 2. 保存所有寄存器
-    addi sp, sp, -72
-    sw ra, 0(sp)
-    sw t0, 4(sp)
-    sw t1, 8(sp)
-    sw t2, 12(sp)
-    sw t3, 16(sp)
-    sw t4, 20(sp)
-    sw t5, 24(sp)
-    sw t6, 28(sp)
-    sw a0, 32(sp)
-    sw a1, 36(sp)
-    sw a2, 40(sp)
-    sw a3, 44(sp)
-    sw a4, 48(sp)
-    sw a5, 52(sp)
-    sw a6, 56(sp)
-    sw a7, 60(sp)
-    sw s0, 64(sp)
-    sw s1, 68(sp)
+    # Save all registers x1 to x31
+    sw x1, 0*4(sp)
+    sw x2, 1*4(sp)
+    sw x3, 2*4(sp)
+    sw x4, 3*4(sp)
+    sw x5, 4*4(sp)
+    sw x6, 5*4(sp)
+    sw x7, 6*4(sp)
+    sw x8, 7*4(sp)
+    sw x9, 8*4(sp)
+    sw x10, 9*4(sp)
+    sw x11, 10*4(sp)
+    sw x12, 11*4(sp)
+    sw x13, 12*4(sp)
+    sw x14, 13*4(sp)
+    sw x15, 14*4(sp)
+    sw x16, 15*4(sp)
+    sw x17, 16*4(sp)
+    sw x18, 17*4(sp)
+    sw x19, 18*4(sp)
+    sw x20, 19*4(sp)
+    sw x21, 20*4(sp)
+    sw x22, 21*4(sp)
+    sw x23, 22*4(sp)
+    sw x24, 23*4(sp)
+    sw x25, 24*4(sp)
+    sw x26, 25*4(sp)
+    sw x27, 26*4(sp)
+    sw x28, 27*4(sp)
+    sw x29, 28*4(sp)
+    sw x30, 29*4(sp)
+    sw x31, 30*4(sp)
 
-    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
-    csrr t0, mcause
+    csrr t0, mcause              # Check exception cause
     li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
+    bne t0, t1, terminate       # Not misaligned load
 
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
-    csrr t0, mepc           
-    lw t1, 0(t0)            
+    csrr a0, mepc               # Load faulting instruction
+    lw t0, 0(a0)
+    andi t1, t0, 0x7F          # Check opcode
+    li t2, 0x03
+    bne t1, t2, terminate       # Not a load instruction
+    srli t1, t0, 12
+    andi t1, t1, 0x7           # Check funct3
+    li t2, 0x2
+    bne t1, t2, terminate       # Not lw
 
-    # 5. 检查是否 lw (opcode 0x00002003)
-    li t2, 0x00002003       
-    and t3, t1, t2
-    bne t3, t2, terminate   # 不是 lw，跳到 terminate
+    srli t1, t0, 7             # Extract rd
+    andi t1, t1, 0x1F
 
-    # 6. 获取未对齐的地址
-    csrr t4, mtval
+    csrr a0, mtval              # Faulting address
+    lbu t2, 0(a0)              # Load bytes
+    lbu t3, 1(a0)
+    lbu t4, 2(a0)
+    lbu t5, 3(a0)
 
-    # 7. 解析 lw 目标寄存器 (rd)
-    srli t5, t1, 7            
-    andi t5, t5, 0x1F        
+    slli t5, t5, 24            # Combine bytes
+    slli t4, t4, 16
+    or t5, t5, t4
+    slli t3, t3, 8
+    or t5, t5, t3
+    or t5, t5, t2
 
-    # 8. **修正读取顺序（小端序，最高字节先加载）**
-    lbu t6, 3(t4)  # 最高字节
-    slli t6, t6, 24
+    addi t1, t1, -1            # Calculate offset
+    slli t1, t1, 2
+    add t1, sp, t1
+    sw t5, 0(t1)               # Update saved register
 
-    lbu t7, 2(t4)  
-    slli t7, t7, 16
-    or t6, t6, t7
-
-    lbu t7, 1(t4)  
-    slli t7, t7, 8
-    or t6, t6, t7
-
-    lbu t7, 0(t4)  # 最低字节
-    or t6, t6, t7
-
-    # 9. **修正存储 (确保 rd 对齐)**
-    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
-    addi t3, sp, 32
-    add t3, t3, t5
-    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
-
-    # 10. 跳过错误指令
+    csrr t0, mepc              # Increment mepc
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 11. 恢复所有寄存器
-    lw ra, 0(sp)
-    lw t0, 4(sp)
-    lw t1, 8(sp)
-    lw t2, 12(sp)
-    lw t3, 16(sp)
-    lw t4, 20(sp)
-    lw t5, 24(sp)
-    lw t6, 28(sp)
-    lw a0, 32(sp)
-    lw a1, 36(sp)
-    lw a2, 40(sp)
-    lw a3, 44(sp)
-    lw a4, 48(sp)
-    lw a5, 52(sp)
-    lw a6, 56(sp)
-    lw a7, 60(sp)
-    lw s0, 64(sp)
-    lw s1, 68(sp)
+restore_registers:
+    # Restore all registers
+    lw x1, 0*4(sp)
+    lw x2, 1*4(sp)
+    lw x3, 2*4(sp)
+    lw x4, 3*4(sp)
+    lw x5, 4*4(sp)
+    lw x6, 5*4(sp)
+    lw x7, 6*4(sp)
+    lw x8, 7*4(sp)
+    lw x9, 8*4(sp)
+    lw x10, 9*4(sp)
+    lw x11, 10*4(sp)
+    lw x12, 11*4(sp)
+    lw x13, 12*4(sp)
+    lw x14, 13*4(sp)
+    lw x15, 14*4(sp)
+    lw x16, 15*4(sp)
+    lw x17, 16*4(sp)
+    lw x18, 17*4(sp)
+    lw x19, 18*4(sp)
+    lw x20, 19*4(sp)
+    lw x21, 20*4(sp)
+    lw x22, 21*4(sp)
+    lw x23, 22*4(sp)
+    lw x24, 23*4(sp)
+    lw x25, 24*4(sp)
+    lw x26, 25*4(sp)
+    lw x27, 26*4(sp)
+    lw x28, 27*4(sp)
+    lw x29, 28*4(sp)
+    lw x30, 29*4(sp)
+    lw x31, 30*4(sp)
 
-    # 12. 释放栈空间并恢复 sp
-    addi sp, sp, 72
-    csrrw sp, mscratch, sp
-
-    # 13. 继续执行程序
+    addi sp, sp, 31*4          # Deallocate stack
+    csrrw sp, mscratch, sp     # Swap back to user stack
     mret
 
 	
