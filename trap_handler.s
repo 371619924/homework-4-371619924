@@ -105,118 +105,102 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    csrrw   t0, mscratch, sp
-    mv      sp, t0
-    addi    sp, sp, -124
-    sw      ra,   0(sp)
-    csrr    t1, mscratch
-    sw      t1,   4(sp)
-    sw      gp,   8(sp)
-    sw      tp,  12(sp)
-    sw      t0,  16(sp)
-    sw      t1,  20(sp)
-    sw      t2,  24(sp)
-    sw      s0,  28(sp)
-    sw      s1,  32(sp)
-    sw      a0,  36(sp)
-    sw      a1,  40(sp)
-    sw      a2,  44(sp)
-    sw      a3,  48(sp)
-    sw      a4,  52(sp)
-    sw      a5,  56(sp)
-    sw      a6,  60(sp)
-    sw      a7,  64(sp)
-    sw      s2,  68(sp)
-    sw      s3,  72(sp)
-    sw      s4,  76(sp)
-    sw      s5,  80(sp)
-    sw      s6,  84(sp)
-    sw      s7,  88(sp)
-    sw      s8,  92(sp)
-    sw      s9,  96(sp)
-    sw      s10, 100(sp)
-    sw      s11, 104(sp)
-    sw      t3, 108(sp)
-    sw      t4, 112(sp)
-    sw      t5, 116(sp)
-    sw      t6, 120(sp)
-    csrr    t3, mcause
-    li      t4, 4
-    bne     t3, t4, trap_unhandled
-    csrr    t5, mepc
-    lw      t6, 0(t5)
-    andi    t7, t6, 127
-    li      t0, 3
-    bne     t7, t0, trap_unhandled
-    srli    t7, t6, 12
-    andi    t7, t7, 7
-    li      t0, 2
-    bne     t7, t0, trap_unhandled
-    csrr    t8, mtval
-    lbu     t9, 0(t8)
-    lbu     t10, 1(t8)
-    lbu     t11, 2(t8)
-    lbu     t12, 3(t8)
-    slli    t10, t10, 8
-    slli    t11, t11, 16
-    slli    t12, t12, 24
-    or      t9, t9, t10
-    or      t9, t9, t11
-    or      t9, t9, t12
-    srli    t7, t6, 7
-    andi    t7, t7, 31
-    beqz    t7, misaligned_done
-    li      t0, 2
-    beq     t7, t0, update_x2
-    addi    t0, t7, -1
-    slli    t0, t0, 2
-    add     t0, sp, t0
-    sw      t9, 0(t0)
-    j       misaligned_done
-update_x2:
-    sw      t9, 4(sp)
-misaligned_done:
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-    lw      t6, 120(sp)
-    lw      t5, 116(sp)
-    lw      t4, 112(sp)
-    lw      t3, 108(sp)
-    lw      s11, 104(sp)
-    lw      s10, 100(sp)
-    lw      s9,  96(sp)
-    lw      s8,  92(sp)
-    lw      s7,  88(sp)
-    lw      s6,  84(sp)
-    lw      s5,  80(sp)
-    lw      s4,  76(sp)
-    lw      s3,  72(sp)
-    lw      s2,  68(sp)
-    lw      a7,  64(sp)
-    lw      a6,  60(sp)
-    lw      a5,  56(sp)
-    lw      a4,  52(sp)
-    lw      a3,  48(sp)
-    lw      a2,  44(sp)
-    lw      a1,  40(sp)
-    lw      a0,  36(sp)
-    lw      s1,  32(sp)
-    lw      s0,  28(sp)
-    lw      t2,  24(sp)
-    lw      t1,  20(sp)
-    lw      t0,  16(sp)
-    lw      tp,  12(sp)
-    lw      gp,   8(sp)
-    lw      t1,   4(sp)
-    lw      ra,   0(sp)
-    addi    sp, sp, 124
-    csrrw   t0, mscratch, sp
-    mv      sp, t0
+    # 1. 交换 sp 和 mscratch，使得 sp 指向内核栈
+    csrrw sp, mscratch, sp 
+
+    # 2. 保存所有寄存器
+    addi sp, sp, -72         # 分配空间 (18 个 4-byte 寄存器)
+    sw ra, 0(sp)             
+    sw t0, 4(sp)
+    sw t1, 8(sp)
+    sw t2, 12(sp)
+    sw t3, 16(sp)
+    sw t4, 20(sp)
+    sw t5, 24(sp)
+    sw t6, 28(sp)
+    sw a0, 32(sp)
+    sw a1, 36(sp)
+    sw a2, 40(sp)
+    sw a3, 44(sp)
+    sw a4, 48(sp)
+    sw a5, 52(sp)
+    sw a6, 56(sp)
+    sw a7, 60(sp)
+    sw s0, 64(sp)
+    sw s1, 68(sp)
+
+    # 3. 读取 mcause，检查是否是 misaligned load (mcause = 4)
+    csrr t0, mcause           
+    li t1, 4                 
+    bne t0, t1, terminate     # 如果不是 misaligned load，跳转到 terminate
+
+    # 4. 读取 mepc 获取导致异常的指令
+    csrr t0, mepc              # t0 = mepc (指令地址)
+    lw t1, 0(t0)               # t1 = 指令 (读取出 lw 指令)
+    
+    # 检查是否是 lw 指令
+    li t2, 0x00002003         # lw 指令的掩码 (bit 6-0 = 0000011)
+    and t3, t1, t2
+    bne t3, t2, terminate     # 如果不是 lw，跳转到 terminate
+
+    # 5. 读取未对齐的地址 (mtval 存储了错误访问地址)
+    csrr t4, mtval            # t4 = 访问地址 (misaligned)
+
+    # 6. 解析 lw 目标寄存器 (rd)
+    srli t5, t1, 7            # 取出 rd (bits 11-7)
+    andi t5, t5, 0x1F         # 仅保留 5-bit
+
+    # 7. 逐字节读取数据
+    lbu t6, 0(t4)             # 读取第一个字节
+    lbu t7, 1(t4)             # 读取第二个字节
+    slli t7, t7, 8
+    or t6, t6, t7             # 合并低 16 位
+
+    lbu t7, 2(t4)             # 读取第三个字节
+    slli t7, t7, 16
+    or t6, t6, t7             # 合并低 24 位
+
+    lbu t7, 3(t4)             # 读取第四个字节
+    slli t7, t7, 24
+    or t6, t6, t7             # 合并完整 32 位数据
+
+    # 8. 将修正后的数据写回 rd
+    addi t7, sp, 32           # 计算保存的 a0 位置
+    add t7, t7, t5            # 计算 rd 对应的存储偏移
+    sw t6, 0(t7)              # 存入栈中
+
+    # 9. 增加 mepc，跳过错误指令
+    addi t0, t0, 4
+    csrw mepc, t0
+
+    # 10. 恢复所有寄存器
+    lw ra, 0(sp)
+    lw t0, 4(sp)
+    lw t1, 8(sp)
+    lw t2, 12(sp)
+    lw t3, 16(sp)
+    lw t4, 20(sp)
+    lw t5, 24(sp)
+    lw t6, 28(sp)
+    lw a0, 32(sp)
+    lw a1, 36(sp)
+    lw a2, 40(sp)
+    lw a3, 44(sp)
+    lw a4, 48(sp)
+    lw a5, 52(sp)
+    lw a6, 56(sp)
+    lw a7, 60(sp)
+    lw s0, 64(sp)
+    lw s1, 68(sp)
+
+    # 11. 释放栈空间并恢复 sp
+    addi sp, sp, 72
+    csrrw sp, mscratch, sp
+
+    # 12. 返回到用户模式
     mret
-trap_unhandled:
-    addi    sp, sp, 124
-    j       terminate
+
+    
 
 	
 	
