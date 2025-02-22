@@ -133,109 +133,206 @@ __mstart:
     
 	.globl __mtrap
 __mtrap:
-	# 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+	# 交换 sp 与 mscratch，使 sp 成为内核栈，mscratch 保存用户 sp
 	csrrw   sp, mscratch, sp
-
-	# 分配 120 字节的 trap frame 空间，保存 30 个寄存器（x1, x3–x31）
+	# 为 trap frame 分配 120 字节空间（保存 x1, x3–x31，共 30 个寄存器）
 	addi    sp, sp, -120
-
-	# 按要求保存寄存器，顺序：x1, x3, x4, x5, …, x31
+	# 按规定顺序保存寄存器
 	sw      ra,   0(sp)      # x1 (ra)
 	sw      gp,   4(sp)      # x3 (gp)
 	sw      tp,   8(sp)      # x4 (tp)
-	sw      t0,  12(sp)      # x5 (t0)
-	sw      t1,  16(sp)      # x6 (t1)
-	sw      t2,  20(sp)      # x7 (t2)
-	sw      s0,  24(sp)      # x8 (s0)
-	sw      s1,  28(sp)      # x9 (s1)
-	sw      a0,  32(sp)      # x10 (a0)
-	sw      a1,  36(sp)      # x11 (a1)
-	sw      a2,  40(sp)      # x12 (a2)
-	sw      a3,  44(sp)      # x13 (a3)
-	sw      a4,  48(sp)      # x14 (a4)
-	sw      a5,  52(sp)      # x15 (a5)
-	sw      a6,  56(sp)      # x16 (a6)
-	sw      a7,  60(sp)      # x17 (a7)
-	sw      s2,  64(sp)      # x18 (s2)
-	sw      s3,  68(sp)      # x19 (s3)
-	sw      s4,  72(sp)      # x20 (s4)
-	sw      s5,  76(sp)      # x21 (s5)
-	sw      s6,  80(sp)      # x22 (s6)
-	sw      s7,  84(sp)      # x23 (s7)
-	sw      s8,  88(sp)      # x24 (s8)
-	sw      s9,  92(sp)      # x25 (s9)
-	sw      s10, 96(sp)      # x26 (s10)
-	sw      s11,100(sp)      # x27 (s11)
-	sw      t3,104(sp)       # x28 (t3)
-	sw      t4,108(sp)       # x29 (t4)
-	sw      t5,112(sp)       # x30 (t5)
-	sw      t6,116(sp)       # x31 (t6)
+	sw      t0,  12(sp)     # x5 (t0)
+	sw      t1,  16(sp)     # x6 (t1)
+	sw      t2,  20(sp)     # x7 (t2)
+	sw      s0,  24(sp)     # x8 (s0)
+	sw      s1,  28(sp)     # x9 (s1)
+	sw      a0,  32(sp)     # x10 (a0)
+	sw      a1,  36(sp)     # x11 (a1)
+	sw      a2,  40(sp)     # x12 (a2)
+	sw      a3,  44(sp)     # x13 (a3)
+	sw      a4,  48(sp)     # x14 (a4)
+	sw      a5,  52(sp)     # x15 (a5)
+	sw      a6,  56(sp)     # x16 (a6)
+	sw      a7,  60(sp)     # x17 (a7)
+	sw      s2,  64(sp)     # x18 (s2)
+	sw      s3,  68(sp)     # x19 (s3)
+	sw      s4,  72(sp)     # x20 (s4)
+	sw      s5,  76(sp)     # x21 (s5)
+	sw      s6,  80(sp)     # x22 (s6)
+	sw      s7,  84(sp)     # x23 (s7)
+	sw      s8,  88(sp)     # x24 (s8)
+	sw      s9,  92(sp)     # x25 (s9)
+	sw      s10, 96(sp)     # x26 (s10)
+	sw      s11,100(sp)     # x27 (s11)
+	sw      t3,104(sp)      # x28 (t3)
+	sw      t4,108(sp)      # x29 (t4)
+	sw      t5,112(sp)      # x30 (t5)
+	sw      t6,116(sp)      # x31 (t6)
 
-	# 检查异常类型：仅处理 misaligned load 异常 (mcause == 4)
+	# 根据 mcause 判断异常类型：
 	csrr    t0, mcause
 	li      t1, 4
-	bne     t0, t1, trap_other
+	beq     t0, t1, handle_load    # misaligned load
+	li      t1, 6
+	beq     t0, t1, handle_store   # misaligned store
+	li      t1, 0
+	beq     t0, t1, handle_fetch   # instruction address misaligned
+	j       trap_other             # 其他异常，直接终止
 
-	# 取得触发异常的指令地址与指令字
-	csrr    t0, mepc          # t0 = 出错指令地址
-	lw      t1, 0(t0)         # t1 = 指令字
-
-	# 检查 opcode（低 7 位）是否为 0x03（load 指令）
+;=======================
+; 处理 misaligned load (lw) 补丁
+handle_load:
+	# 从 mepc 取得触发异常的 lw 指令
+	csrr    t0, mepc
+	lw      t1, 0(t0)
+	# 检查 opcode 是否为 0x03 (load)
 	andi    t2, t1, 0x7F
 	li      t3, 0x03
 	bne     t2, t3, trap_other
-
-	# 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+	# 检查 funct3 是否为 0x2 (lw)
 	srai    t2, t1, 12
 	andi    t2, t2, 0x7
 	li      t3, 0x2
 	bne     t2, t3, trap_other
-
-	# 提取目标寄存器号 rd（位 11:7）
+	# 提取目标寄存器 rd (位 11:7)
 	srai    t4, t1, 7
-	andi    t4, t4, 0x1F      # t4 = rd
-	beq     t4, zero, trap_other  # 若 rd 为 0，则不补丁
+	andi    t4, t4, 0x1F
+	# 不对 sp (x2) 补丁
 	li      t2, 2
-	beq     t4, t2, trap_other    # 若 rd 为 sp (x2)，不处理
+	beq     t4, t2, trap_other
+	# 如果 rd != 0 则补丁；若 rd==0（写入 x0，无效，但仍应跳过出错指令）
+	bnez    t4, patch_load
+	j       skip_load_patch
+patch_load:
+	# 计算 trap frame 中对应寄存器的偏移：x1 在偏移 0，其余为 (rd-2)*4
 	li      t2, 1
-	beq     t4, t2, update_offset
-	# 计算保存目标寄存器在 trap frame 中的偏移量：
-	addi    t2, t4, -2        # (rd-2)
-	slli    t2, t2, 2         # (rd-2)*4
-	j       done_offset
-update_offset:
-	li      t2, 0             # 若 rd 为 1（x1），偏移量为 0
-done_offset:
-	add     t2, sp, t2        # t2 指向 trap frame 中目标寄存器槽
-	mv      a7, t2            # 保存该地址到 a7，后续用于写入补丁数据
-
-	# 重构 misaligned load 数据：
-	# 从 mtval 中取出出错地址，连续加载 4 个字节并重组为一个字
-	csrr    t5, mtval         # t5 = faulting effective address
-	lbu     t6, 0(t5)         # 加载第 0 字节
+	beq     t4, t2, set_offset_load_zero
+	addi    t2, t4, -2
+	slli    t2, t2, 2
+	j       done_load_offset
+set_offset_load_zero:
+	li      t2, 0
+done_load_offset:
+	add     t2, sp, t2
+	mv      a7, t2
+	# 从 mtval（故障地址）重构 32 位数据（使用 lbu 取 4 字节）
+	csrr    t5, mtval
+	lbu     t6, 0(t5)
 	addi    t0, t5, 1
-	lbu     t1, 0(t0)         # 加载第 1 字节
+	lbu     t1, 0(t0)
 	addi    t0, t5, 2
-	lbu     t2, 0(t0)         # 加载第 2 字节
+	lbu     t2, 0(t0)
 	addi    t0, t5, 3
-	lbu     t3, 0(t0)         # 加载第 3 字节
-
+	lbu     t3, 0(t0)
 	slli    t1, t1, 8
 	slli    t2, t2, 16
 	slli    t3, t3, 24
 	or      t6, t6, t1
 	or      t6, t6, t2
 	or      t6, t6, t3
-
-	# 将重构的字写入保存的目标寄存器槽中
+	# 将补丁数据写入 trap frame 对应位置
 	sw      t6, 0(a7)
-
-	# 更新 mepc，跳过出错指令（4 字节）
+skip_load_patch:
+	# 更新 mepc（跳过出错指令 4 字节）
 	csrr    t0, mepc
 	addi    t0, t0, 4
 	csrw    mepc, t0
+	j       common_restore
 
-	# 恢复保存的寄存器（顺序与保存时相同）
+;=======================
+; 处理 misaligned store (sw) 补丁
+handle_store:
+	csrr    t0, mepc
+	lw      t1, 0(t0)
+	# 检查 opcode 是否为 0x23 (store)
+	andi    t2, t1, 0x7F
+	li      t3, 0x23
+	bne     t2, t3, trap_other
+	# 检查 funct3 是否为 0x2 (sw)
+	srai    t2, t1, 12
+	andi    t2, t2, 0x7
+	li      t3, 0x2
+	bne     t2, t3, trap_other
+	# 提取源寄存器 rs2 (位 24:20)
+	srai    t4, t1, 20
+	andi    t4, t4, 0x1F
+	# 若 rs2 为 sp (x2) 则不补丁
+	li      t5, 2
+	beq     t4, t5, trap_other
+	# 若 rs2 非 0，则从 trap frame 取出存储值；若 rs2==0，则值为 0
+	bnez    t4, store_patch
+	li      t6, 0
+	j       do_store_patch
+store_patch:
+	li      t5, 1
+	beq     t4, t5, set_offset_store_zero
+	addi    t5, t4, -2
+	slli    t5, t5, 2
+	j       done_store_offset
+set_offset_store_zero:
+	li      t5, 0
+done_store_offset:
+	add     t5, sp, t5
+	lw      t6, 0(t5)
+do_store_patch:
+	# 从 mtval 得到出错的存储地址
+	csrr    t7, mtval
+	# 将 t6 的 32 位数据拆分为 4 个字节，并用 sb 存入
+	andi    t1, t6, 0xFF       # byte0
+	srli    t2, t6, 8
+	andi    t2, t2, 0xFF       # byte1
+	srli    t3, t6, 16
+	andi    t3, t3, 0xFF       # byte2
+	srli    t4, t6, 24
+	andi    t4, t4, 0xFF       # byte3
+	sb      t1, 0(t7)
+	addi    t7, t7, 1
+	sb      t2, 0(t7)
+	addi    t7, t7, 1
+	sb      t3, 0(t7)
+	addi    t7, t7, 1
+	sb      t4, 0(t7)
+	# 更新 mepc，跳过存储指令
+	csrr    t0, mepc
+	addi    t0, t0, 4
+	csrw    mepc, t0
+	j       common_restore
+
+;=======================
+; 处理取指不对齐（bad jump）补丁：对 instruction fetch misaligned (mcause==0)
+handle_fetch:
+	csrr    t0, mtval         # 取故障取指地址
+	lbu     t1, 0(t0)
+	addi    t0, t0, 1
+	lbu     t2, 0(t0)
+	addi    t0, t0, 1
+	lbu     t3, 0(t0)
+	addi    t0, t0, 1
+	lbu     t4, 0(t0)
+	slli    t2, t2, 8
+	slli    t3, t3, 16
+	slli    t4, t4, 24
+	or      t1, t1, t2
+	or      t1, t1, t3
+	or      t1, t1, t4
+	# 将补救后的指令写回内存（假设代码段可写）
+	csrr    t0, mepc
+	sw      t1, 0(t0)
+	# 更新 mepc 跳过故障指令
+	addi    t0, t0, 4
+	csrw    mepc, t0
+	j       common_restore
+
+;=======================
+; 其他异常，直接恢复现场后跳转至 terminate（terminate 在 utils.s 中定义）
+trap_other:
+	addi    sp, sp, 120
+	csrrw   sp, mscratch, sp
+	j       terminate
+
+;=======================
+; 恢复保存的寄存器并返回用户模式
+common_restore:
 	lw      ra,   0(sp)
 	lw      gp,   4(sp)
 	lw      tp,   8(sp)
@@ -267,18 +364,8 @@ done_offset:
 	lw      t5,112(sp)
 	lw      t6,116(sp)
 	addi    sp, sp, 120
-
-	# 恢复用户 sp：将 mscratch 中的值换回 sp
 	csrrw   sp, mscratch, sp
-
 	mret
-
-trap_other:
-	# 非处理的异常：恢复 sp 并跳转到终止处理（terminate 在其他文件中定义）
-	addi    sp, sp, 120
-	csrrw   sp, mscratch, sp
-	j       terminate
-
 
 
 
