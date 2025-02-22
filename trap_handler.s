@@ -105,10 +105,10 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. Swap sp and mscratch so sp points to kernel stack
+    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
     csrrw sp, mscratch, sp  
 
-    # 2. Save all registers (72 bytes total)
+    # 2. 保存所有寄存器（共 72 字节）
     addi sp, sp, -72
     sw ra, 0(sp)
     sw t0, 4(sp)
@@ -129,27 +129,27 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. Read mcause and check for misaligned load (4) or store (6)
+    # 3. 读取 mcause，判断是否是 misaligned load (4) 或 store (6)
     csrr t0, mcause
     li t1, 4      # Misaligned Load Address
     li t2, 6      # Misaligned Store Address
     beq t0, t1, handle_misaligned_load
     beq t0, t2, handle_misaligned_store
 
-    # Other exceptions: jump to terminate routine
+    # 其他异常，跳转至 terminate
     j terminate
 
 handle_misaligned_load:
-    csrr t4, mtval         # t4 = misaligned address
+    csrr t4, mtval         # t4 = 未对齐地址
     beqz t4, terminate
 
-    csrr t0, mepc          # get faulting instruction address
-    lw t1, 0(t0)           # fetch faulting instruction
-    li t2, 0x00002003      # constant for lw (opcode 0x03 with proper funct3 bits)
+    csrr t0, mepc          # 获取 faulting 指令地址
+    lw t1, 0(t0)           # 取出出错指令
+    li t2, 0x00002003      # lw 指令标识
     and t3, t1, t2
-    bne t3, t2, terminate  # if not an lw, terminate
+    bne t3, t2, terminate  # 如果不是 lw，则终止
 
-    # Emulate lw by reading four bytes (little-endian)
+    # 模拟 lw：逐字节读取（Little-Endian）
     lbu t3, 0(t4)
     lbu t6, 1(t4)
     slli t6, t6, 8
@@ -161,45 +161,123 @@ handle_misaligned_load:
     slli t6, t6, 24
     or t3, t3, t6
 
-    # Extract destination register (rd) from instruction (bits 11:7)
+    # 提取出错指令的 rd 字段（bits 11:7）
     srli t5, t1, 7
     andi t5, t5, 0x1F
-    bnez t5, patch_load_rd   # if rd != x0, patch the saved register
-    j skip_patch_load        # if rd == 0, do nothing
-patch_load_rd:
-    la t7, load_table        # t7 = address of lookup table
-    slli t5, t5, 2           # multiply register number by 4 (word offset)
-    add t7, t7, t5           # t7 now points to the proper offset in the table
-    sw t3, 0(t7)           # write the emulated load result into the trap frame
+    beqz t5, skip_patch_load  # 如果 rd 为 0，则不需补丁
+
+    # 计算 rd 对应的偏移（结果存入 t7）
+    # 使用 t5 保存寄存器号，t7 用于存放偏移
+    li t7, 0          # 默认偏移为 0
+    li t8, 1
+    beq t5, t8, done_offset_load  # 若 rd == 1，则 offset = 0
+
+    li t8, 5
+    blt t5, t8, done_offset_load  # 若 rd < 5，则未保存，offset 保持 0
+    li t8, 7
+    ble t5, t8, { 
+        # 对于 x5~x7: offset = (rd - 4) * 4
+        addi t7, t5, -4
+        slli t7, t7, 2
+        j done_offset_load
+    }
+
+    li t8, 10
+    blt t5, t8, done_offset_load  # rd < 10 未保存
+    li t8, 17
+    ble t5, t8, { 
+        # 对于 x10~x17: offset = (rd - 10 + 8) * 4 = (rd - 2) * 4
+        addi t7, t5, -2
+        slli t7, t7, 2
+        j done_offset_load
+    }
+
+    li t8, 28
+    blt t5, t8, done_offset_load  # rd < 28 未保存
+    li t8, 31
+    ble t5, t8, { 
+        # 对于 x28~x31: offset = (rd - 28 + 4) * 4 = (rd - 24) * 4
+        addi t7, t5, -24
+        slli t7, t7, 2
+        j done_offset_load
+    }
+
+    li t8, 8
+    beq t5, t8, { li t7, 64; j done_offset_load }  # x8 (s0)
+    li t8, 9
+    beq t5, t8, { li t7, 68; }                   # x9 (s1)
+
+done_offset_load:
+    add t7, sp, t7        # t7 = sp + computed offset
+    sw t3, 0(t7)          # 将模拟的 load 值写入 trap frame
+
 skip_patch_load:
     csrr t0, mepc
-    addi t0, t0, 4         # skip over the faulting instruction
+    addi t0, t0, 4        # 跳过出错指令
     csrw mepc, t0
     j restore_registers
 
 handle_misaligned_store:
-    csrr t4, mtval         # t4 = misaligned effective address
+    csrr t4, mtval         # t4 = 未对齐的有效地址
     beqz t4, terminate
 
     csrr t0, mepc
-    lw t1, 0(t0)           # fetch faulting instruction
-    li t2, 0x00002023      # constant for sw (opcode 0x23 with proper funct3 bits)
+    lw t1, 0(t0)           # 取出出错指令
+    li t2, 0x00002023      # sw 指令标识
     and t3, t1, t2
-    bne t3, t2, terminate  # if not an sw, terminate
+    bne t3, t2, terminate  # 如果不是 sw，则终止
 
-    # Extract rs2 (source register for store) from instruction (bits 24:20)
+    # 提取 sw 指令中的 rs2 字段（bits 24:20）
     srli t5, t1, 20
     andi t5, t5, 0x1F
-    beqz t5, load_zero_for_store  # if rs2 is x0, use 0
-    la t7, load_table        # use same table for lookup
-    slli t5, t5, 2
-    add t7, t7, t5
-    lw t3, 0(t7)           # t3 now holds the value to be stored
-    j store_value
+    beqz t5, load_zero_for_store  # 若 rs2 为 0，使用 0
+
+    # 计算 rs2 对应的偏移（存入 t7）
+    li t7, 0
+    li t8, 1
+    beq t5, t8, done_offset_store
+    li t8, 5
+    blt t5, t8, done_offset_store
+    li t8, 7
+    ble t5, t8, { 
+        addi t7, t5, -4
+        slli t7, t7, 2
+        j done_offset_store
+    }
+
+    li t8, 10
+    blt t5, t8, done_offset_store
+    li t8, 17
+    ble t5, t8, { 
+        addi t7, t5, -2
+        slli t7, t7, 2
+        j done_offset_store
+    }
+
+    li t8, 28
+    blt t5, t8, done_offset_store
+    li t8, 31
+    ble t5, t8, { 
+        addi t7, t5, -24
+        slli t7, t7, 2
+        j done_offset_store
+    }
+
+    li t8, 8
+    beq t5, t8, { li t7, 64; j done_offset_store }
+    li t8, 9
+    beq t5, t8, { li t7, 68; }
+
+done_offset_store:
+    add t7, sp, t7        # t7 = sp + computed offset
+    lw t3, 0(t7)          # 取出原来保存的值（rs2的值）
+    j store_done
+
 load_zero_for_store:
     li t3, 0
-store_value:
-    # Emulate sw by storing the word byte-by-byte (little-endian)
+
+store_done:
+    # 模拟 sw：逐字节写入（Little-Endian）
     sb t3, 0(t4)
     srli t3, t3, 8
     sb t3, 1(t4)
@@ -209,7 +287,7 @@ store_value:
     sb t3, 3(t4)
     
     csrr t0, mepc
-    addi t0, t0, 4         # advance past the faulting instruction
+    addi t0, t0, 4        # 跳过出错指令
     csrw mepc, t0
     j restore_registers
 
@@ -235,44 +313,6 @@ restore_registers:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
-
-    .align 2
-load_table:
-    # Table mapping register number -> offset in saved trap frame
-    # (only registers that were saved are nonzero; writes to x0 are ignored)
-    .word 0      #  x0 (not saved)
-    .word 0      #  x1 (ra)  offset 0
-    .word 0      #  x2 (not saved)
-    .word 0      #  x3 (not saved)
-    .word 0      #  x4 (not saved)
-    .word 4      #  x5 (t0)  offset 4
-    .word 8      #  x6 (t1)  offset 8
-    .word 12     #  x7 (t2)  offset 12
-    .word 64     #  x8 (s0)  offset 64
-    .word 68     #  x9 (s1)  offset 68
-    .word 32     #  x10 (a0) offset 32
-    .word 36     #  x11 (a1) offset 36
-    .word 40     #  x12 (a2) offset 40
-    .word 44     #  x13 (a3) offset 44
-    .word 48     #  x14 (a4) offset 48
-    .word 52     #  x15 (a5) offset 52
-    .word 56     #  x16 (a6) offset 56
-    .word 60     #  x17 (a7) offset 60
-    .word 0      #  x18 (not saved)
-    .word 0      #  x19 (not saved)
-    .word 0      #  x20 (not saved)
-    .word 0      #  x21 (not saved)
-    .word 0      #  x22 (not saved)
-    .word 0      #  x23 (not saved)
-    .word 0      #  x24 (not saved)
-    .word 0      #  x25 (not saved)
-    .word 0      #  x26 (not saved)
-    .word 0      #  x27 (not saved)
-    .word 16     #  x28 (t3)  offset 16
-    .word 20     #  x29 (t4)  offset 20
-    .word 24     #  x30 (t5)  offset 24
-    .word 28     #  x31 (t6)  offset 28
-
 
 
 # This code is taken from the default VRV system code.  It prints out
