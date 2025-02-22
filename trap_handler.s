@@ -131,15 +131,15 @@ __mstart:
 	
   	
     
- .globl __mtrap
+.globl __mtrap
 __mtrap:
     # Swap sp and mscratch so that sp becomes the kernel stack pointer.
     csrrw   sp, mscratch, sp
 
-    # Allocate trap frame for 30 registers (x1, x3–x31) = 120 bytes.
+    # Allocate trap frame for 30 registers (x1 and x3–x31) = 120 bytes.
     addi    sp, sp, -120
 
-    # Save registers in the specified order.
+    # Save registers in order.
     sw      ra,   0(sp)      # x1 (ra)
     sw      gp,   4(sp)      # x3 (gp)
     sw      tp,   8(sp)      # x4 (tp)
@@ -171,122 +171,84 @@ __mtrap:
     sw      t5,112(sp)       # x30 (t5)
     sw      t6,116(sp)       # x31 (t6)
 
-    # Only handle misaligned loads.
+    # Check exception type: only handle misaligned load word.
     csrr    t0, mcause
     li      t1, 4
     bne     t0, t1, trap_other
 
-    # Fetch the faulting instruction.
+    # Fetch the faulting instruction address and instruction word.
     csrr    t0, mepc         # t0 = faulting instruction address
     lw      t1, 0(t0)        # t1 = instruction word
 
-    # Check that the opcode is that of a load (0x03).
-    andi    t4, t1, 0x7F
+    # Check that opcode (bits [6:0]) is 0x03 (load).
+    andi    t2, t1, 0x7F
     li      t3, 0x03
-    bne     t4, t3, trap_other
+    bne     t2, t3, trap_other
 
-    # Extract the funct3 field.
+    # Check that funct3 (bits [14:12]) is 0x2 (lw).
     srai    t2, t1, 12
     andi    t2, t2, 0x7
+    li      t3, 0x2
+    bne     t2, t3, trap_other
 
-    # Only handle load types: LB (0), LH (1), LW (2), LBU (4) and LHU (5).
-    li      t3, 0
-    beq     t2, t3, handle_load
-    li      t3, 1
-    beq     t2, t3, handle_load
-    li      t3, 2
-    beq     t2, t3, handle_load
-    li      t3, 4
-    beq     t2, t3, handle_load
-    li      t3, 5
-    beq     t2, t3, handle_load
-    j       trap_other
-
-handle_load:
-    # Extract rd (bits 11:7) from the instruction.
+    # Extract destination register (rd, bits [11:7]).
     srai    t4, t1, 7
     andi    t4, t4, 0x1F
-    # Do not patch if rd == 0 (x0) or rd == 2 (sp).
+    # Do not patch if rd is x0 or sp (x2).
     beq     t4, zero, trap_other
     li      t3, 2
     beq     t4, t3, trap_other
-    # Compute offset in the trap frame.
+
+    # Compute the offset into the trap frame for the saved rd.
+    # Saved order: x1, x3, x4, … so if rd==1 then offset=0; else offset=(rd-2)*4.
     li      t3, 1
-    beq     t4, t3, update_offset
+    beq     t4, t3, set_offset_zero
     addi    t3, t4, -2
     slli    t3, t3, 2
-    j       done_offset
-update_offset:
+    j       set_offset_done
+set_offset_zero:
     li      t3, 0
-done_offset:
-    add     t3, sp, t3     # t3 now points to the saved slot for rd.
-    mv      a7, t3         # Save this address in a7.
+set_offset_done:
+    add     t3, sp, t3     # t3 now points to trap frame slot for rd.
+    mv      a7, t3         # Save pointer in a7.
 
-    # Get the faulting effective address.
-    csrr    t5, mtval
+    # Emulate the misaligned lw.
+    csrr    t5, mtval      # t5 = effective address A.
+    # Compute offset = A mod 4.
+    andi    t6, t5, 3      # t6 = offset.
+    sub     t5, t5, t6     # t5 = aligned base address.
 
-    # Branch based on funct3 (in t2) to reassemble the loaded data.
-    # For LB (0) and LBU (4): load one byte.
-    li      t0, 0
-    beq     t2, t0, load_byte_sign   # LB (sign-extend)
-    li      t0, 4
-    beq     t2, t0, load_byte_zero   # LBU (zero-extend)
-    # For LH (1) and LHU (5): load two bytes.
-    li      t0, 1
-    beq     t2, t0, load_half_sign   # LH (sign-extend)
-    li      t0, 5
-    beq     t2, t0, load_half_zero   # LHU (zero-extend)
-    # For LW (2): load four bytes.
-    li      t0, 2
-    beq     t2, t0, load_word
-    j       trap_other
+    # Load the two adjacent aligned words.
+    lw      t7, 0(t5)      # first word.
+    lw      t8, 4(t5)      # second word.
 
-load_word:
-    lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t6, t6, t1
-    or      t6, t6, t2
-    or      t6, t6, t3
-    j       store_result
-
-load_half_sign:
-    lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
-    slli    t1, t1, 8
-    or      t6, t6, t1
-    slli    t6, t6, 16
-    srai    t6, t6, 16   # Sign extend 16 bits.
-    j       store_result
-
-load_half_zero:
-    lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
-    slli    t1, t1, 8
-    or      t6, t6, t1   # Zero extension is already in effect.
-    j       store_result
-
-load_byte_sign:
-    lbu     t6, 0(t5)
-    slli    t6, t6, 24
-    srai    t6, t6, 24   # Sign extend 8 bits.
-    j       store_result
-
-load_byte_zero:
-    lbu     t6, 0(t5)    # LBU: already zero-extended.
-    j       store_result
-
-store_result:
-    # Write the patched value into the trap frame.
+    # Combine the two words based on the offset.
+    beq     t6, zero, lw_case0
+    li      t9, 1
+    beq     t6, t9, lw_case1
+    li      t9, 2
+    beq     t6, t9, lw_case2
+    li      t9, 3
+    beq     t6, t9, lw_case3
+lw_case0:
+    mv      t6, t7
+    j       store_lw
+lw_case1:
+    srli    t7, t7, 8       # shift right 8 bits.
+    slli    t8, t8, 24      # shift left 24 bits.
+    or      t6, t7, t8
+    j       store_lw
+lw_case2:
+    srli    t7, t7, 16
+    slli    t8, t8, 16
+    or      t6, t7, t8
+    j       store_lw
+lw_case3:
+    srli    t7, t7, 24
+    slli    t8, t8, 8
+    or      t6, t7, t8
+store_lw:
+    # Write the reconstructed word into the trap frame slot for rd.
     sw      t6, 0(a7)
 
     # Advance mepc to skip the faulting instruction.
@@ -294,7 +256,7 @@ store_result:
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # Restore saved registers.
+    # Restore registers.
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -336,8 +298,6 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
-
-
 
 
 # This code is taken from the default VRV system code. It prints out
