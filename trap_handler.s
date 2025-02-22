@@ -108,88 +108,77 @@ __mtrap:
     csrrw sp, mscratch, sp  
     addi sp, sp, -72
     sw ra, 0(sp)
-    ...
-    csrr t0, mcause
-    li t1, 4  # Misaligned Load Address
-    li t2, 6  # Misaligned Store Address
-    beq t0, t1, misaligned_access
-    beq t0, t2, misaligned_access
-    j terminate
+    sw t0, 4(sp)
+    sw t1, 8(sp)
+    sw t2, 12(sp)
+    sw t3, 16(sp)
+    sw t4, 20(sp)
+    sw t5, 24(sp)
+    sw t6, 28(sp)
+    sw a0, 32(sp)
+    sw a1, 36(sp)
+    sw a2, 40(sp)
+    sw a3, 44(sp)
+    sw a4, 48(sp)
+    sw a5, 52(sp)
+    sw a6, 56(sp)
+    sw a7, 60(sp)
+    sw s0, 64(sp)
+    sw s1, 68(sp)
 
-misaligned_access:
+    csrr t0, mcause
+    li t1, 4   # Misaligned Load Address
+    bne t0, t1, terminate
+
     csrr t4, mtval  # 获取未对齐地址
-    csrr t0, mepc   # 获取指令地址
+    csrr t0, mepc   # 获取当前指令地址
     lw t1, 0(t0)    # 读取指令
 
-    # 解析 opcode 判断是 lw 还是 sw
     li t2, 0x00002003
     and t3, t1, t2
-    beq t3, t2, handle_lw
+    bne t3, t2, terminate  # 不是 `lw` 终止
 
-    li t2, 0x00002023
-    and t3, t1, t2
-    beq t3, t2, handle_sw
-
-    j terminate  # 不是 lw/sw，终止
-
-handle_lw:
-    # 解析 rs1, rd, 计算目标地址
-    srli t5, t1, 7  # rd
+    srli t5, t1, 7  # 解析 rd
     andi t5, t5, 0x1F
-    srli t6, t1, 15 # rs1
-    andi t6, t6, 0x1F
-    add t6, t6, t4  # rs1 + 偏移
 
-    # 处理未对齐加载
-    lbu t3, 0(t6)
-    lbu t4, 1(t6)
-    slli t4, t4, 8
-    or t3, t3, t4
-    lbu t4, 2(t6)
-    slli t4, t4, 16
-    or t3, t3, t4
-    lbu t4, 3(t6)
-    slli t4, t4, 24
-    or t3, t3, t4
+    lbu t3, 0(t4)   # 按字节读取
+    lbu t6, 1(t4)
+    slli t6, t6, 8
+    or t3, t3, t6
+    lbu t6, 2(t4)
+    slli t6, t6, 16
+    or t3, t3, t6
+    lbu t6, 3(t4)
+    slli t6, t6, 24
+    or t3, t3, t6
 
-    # 存入 rd
     addi t5, t5, 32
     add t5, sp, t5
-    sw t3, 0(t5)
+    sw t3, 0(t5)  # 存入 rd
 
-    j resume_execution
-
-handle_sw:
-    # 解析 rs1, rs2, 计算目标地址
-    srli t6, t1, 15 # rs1
-    andi t6, t6, 0x1F
-    srli t5, t1, 20 # rs2
-    andi t5, t5, 0x1F
-    add t6, t6, t4  # rs1 + 偏移
-
-    # 从 rs2 获取值
-    addi t5, t5, 32
-    add t5, sp, t5
-    lw t3, 0(t5)
-
-    # 处理未对齐存储
-    sb t3, 0(t6)
-    srli t3, t3, 8
-    sb t3, 1(t6)
-    srli t3, t3, 8
-    sb t3, 2(t6)
-    srli t3, t3, 8
-    sb t3, 3(t6)
-
-resume_execution:
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 恢复寄存器
+restore_registers:
     lw ra, 0(sp)
     lw t0, 4(sp)
-    ...
+    lw t1, 8(sp)
+    lw t2, 12(sp)
+    lw t3, 16(sp)
+    lw t4, 20(sp)
+    lw t5, 24(sp)
+    lw t6, 28(sp)
+    lw a0, 32(sp)
+    lw a1, 36(sp)
+    lw a2, 40(sp)
+    lw a3, 44(sp)
+    lw a4, 48(sp)
+    lw a5, 52(sp)
+    lw a6, 56(sp)
+    lw a7, 60(sp)
+    lw s0, 64(sp)
+    lw s1, 68(sp)
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
