@@ -129,36 +129,46 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause，检查是否是 Misaligned Load 或 Misaligned Store
+    # 3. 读取 mcause，检查是否是 Misaligned Load / Store 或 Load access fault
     csrr t0, mcause
     li t1, 4   # Misaligned Load Address
     li t2, 6   # Misaligned Store Address
+    li t3, 5   # Load Access Fault
+    li t4, 7   # Store Access Fault
     beq t0, t1, handle_misaligned_load
     beq t0, t2, handle_misaligned_store
+    beq t0, t3, handle_load_access_fault
+    beq t0, t4, handle_store_access_fault
 
     # 其他异常，终止
     j terminate
 
 handle_misaligned_load:
     csrr t4, mtval  # 获取未对齐地址
-    beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
+    beqz t4, terminate  # mtval 不能是 0，否则终止
 
-    csrr t0, mepc   # 取指令地址
-    lhu t1, 0(t0)    # 读取指令低 16 位
-    lhu t2, 2(t0)    # 读取指令高 16 位
+    # 解析指令
+    csrr t0, mepc
+    lhu t1, 0(t0)   
+    lhu t2, 2(t0)
     slli t2, t2, 16
-    or t1, t1, t2    # 组合指令
+    or t1, t1, t2
 
-    # 确保是 `lw` 指令 (opcode = 0x03)
+    # 确保是 `lw` 指令
     andi t3, t1, 0x7F
     li t4, 0x03
-    bne t3, t4, terminate  # 不是 `lw`，终止
+    bne t3, t4, terminate
 
     # 解析 rd
     srli t5, t1, 7  
     andi t5, t5, 0x1F
 
-    # 逐字节读取并重组（Little-Endian）
+    # 检查 mtval 是否是合法地址
+    bgeu t4, zero, load_ok
+    j terminate
+load_ok:
+
+    # 逐字节读取
     lbu t3, 0(t4)   
     lbu t6, 1(t4)
     slli t6, t6, 8
@@ -171,7 +181,7 @@ handle_misaligned_load:
     or t3, t3, t6
 
     # 存入 rd
-    sw t3, 32(sp)  # 将结果存入 a0 对应位置
+    sw t3, 32(sp)  
 
     # 跳过错误指令
     addi t0, t0, 4
@@ -179,28 +189,29 @@ handle_misaligned_load:
     j restore_registers
 
 handle_misaligned_store:
-    csrr t4, mtval  # 获取未对齐地址
-    beqz t4, terminate  # 如果 mtval 是 0x00000000，终止
+    csrr t4, mtval
+    beqz t4, terminate  
 
-    csrr t0, mepc   # 取指令地址
-    lhu t1, 0(t0)    # 读取指令低 16 位
-    lhu t2, 2(t0)    # 读取指令高 16 位
+    # 解析指令
+    csrr t0, mepc
+    lhu t1, 0(t0)   
+    lhu t2, 2(t0)
     slli t2, t2, 16
-    or t1, t1, t2    # 组合指令
+    or t1, t1, t2
 
-    # 确保是 `sw` 指令 (opcode = 0x23)
+    # 确保是 `sw` 指令
     andi t3, t1, 0x7F
     li t4, 0x23
-    bne t3, t4, terminate  # 不是 `sw`，终止
+    bne t3, t4, terminate  
 
     # 解析 rs2
     srli t5, t1, 20  
     andi t5, t5, 0x1F
 
-    # 获取 rs2 的值
+    # 读取 rs2 值
     lw t3, 32(sp)  
 
-    # 逐字节存储（Little-Endian）
+    # 逐字节存储
     sb t3, 0(t4)
     srli t3, t3, 8
     sb t3, 1(t4)
@@ -213,6 +224,20 @@ handle_misaligned_store:
     addi t0, t0, 4
     csrw mepc, t0
     j restore_registers
+
+handle_load_access_fault:
+    csrr t4, mtval
+    beqz t4, terminate  
+
+    # 记录错误并终止
+    j terminate
+
+handle_store_access_fault:
+    csrr t4, mtval
+    beqz t4, terminate  
+
+    # 记录错误并终止
+    j terminate
 
 restore_registers:
     lw ra, 0(sp)
@@ -236,7 +261,6 @@ restore_registers:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
     mret
-
 
 
 
