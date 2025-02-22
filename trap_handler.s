@@ -105,12 +105,12 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. 交换 sp 和 mscratch，使得 sp 指向内核栈
-    csrrw sp, mscratch, sp 
+    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
+    csrrw sp, mscratch, sp  
 
     # 2. 保存所有寄存器
-    addi sp, sp, -72         # 分配空间 (18 个 4-byte 寄存器)
-    sw ra, 0(sp)             
+    addi sp, sp, -72
+    sw ra, 0(sp)
     sw t0, 4(sp)
     sw t1, 8(sp)
     sw t2, 12(sp)
@@ -129,47 +129,47 @@ __mtrap:
     sw s0, 64(sp)
     sw s1, 68(sp)
 
-    # 3. 读取 mcause，检查是否是 misaligned load (mcause = 4)
-    csrr t0, mcause           
-    li t1, 4                 
-    bne t0, t1, terminate     # 如果不是 misaligned load，跳转到 terminate
+    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
+    csrr t0, mcause
+    li t1, 4
+    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
 
-    # 4. 读取 mepc 获取导致异常的指令
-    csrr t0, mepc              # t0 = mepc (指令地址)
-    lw t1, 0(t0)               # t1 = 指令 (读取出 lw 指令)
-    
-    # 检查是否是 lw 指令
-    li t2, 0x00002003         # lw 指令的掩码 (bit 6-0 = 0000011)
+    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
+    csrr t0, mepc           
+    lw t1, 0(t0)            
+
+    # 检查指令是否是 lw (opcode 0x00002003)
+    li t2, 0x00002003       
     and t3, t1, t2
-    bne t3, t2, terminate     # 如果不是 lw，跳转到 terminate
+    bne t3, t2, terminate   # 如果不是 lw，跳转 terminate
 
-    # 5. 读取未对齐的地址 (mtval 存储了错误访问地址)
-    csrr t4, mtval            # t4 = 访问地址 (misaligned)
+    # 5. 获取未对齐的地址
+    csrr t4, mtval
 
     # 6. 解析 lw 目标寄存器 (rd)
-    srli t5, t1, 7            # 取出 rd (bits 11-7)
-    andi t5, t5, 0x1F         # 仅保留 5-bit
+    srli t5, t1, 7            
+    andi t5, t5, 0x1F        
 
-    # 7. 逐字节读取数据
-    lbu t6, 0(t4)             # 读取第一个字节
-    lbu t7, 1(t4)             # 读取第二个字节
+    # 7. 逐字节读取数据（修正 lbu 兼容 VRV）
+    lb t6, 0(t4)             
+    lb t7, 1(t4)             
     slli t7, t7, 8
-    or t6, t6, t7             # 合并低 16 位
+    or t6, t6, t7            
 
-    lbu t7, 2(t4)             # 读取第三个字节
+    lb t7, 2(t4)             
     slli t7, t7, 16
-    or t6, t6, t7             # 合并低 24 位
+    or t6, t6, t7            
 
-    lbu t7, 3(t4)             # 读取第四个字节
+    lb t7, 3(t4)             
     slli t7, t7, 24
-    or t6, t6, t7             # 合并完整 32 位数据
+    or t6, t6, t7            
 
-    # 8. 将修正后的数据写回 rd
-    addi t7, sp, 32           # 计算保存的 a0 位置
-    add t7, t7, t5            # 计算 rd 对应的存储偏移
-    sw t6, 0(t7)              # 存入栈中
+    # 8. 将修正后的数据存入 rd 对应的寄存器
+    addi t7, sp, 32           
+    add t7, t7, t5            
+    sw t6, 0(t7)              
 
-    # 9. 增加 mepc，跳过错误指令
+    # 9. 跳过错误指令
     addi t0, t0, 4
     csrw mepc, t0
 
@@ -197,8 +197,10 @@ __mtrap:
     addi sp, sp, 72
     csrrw sp, mscratch, sp
 
-    # 12. 返回到用户模式
+    # 12. 继续执行程序
     mret
+
+
 
     
 
