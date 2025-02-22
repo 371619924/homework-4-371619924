@@ -103,191 +103,124 @@ __mstart:
 ### Trap handler
 
 ### You will need to write your own trap handler functionality here.
-__mtrap:
-	# --- Swap sp and mscratch so that we use the kernel stack ---
-    csrr    t8, mscratch      # t8 = kernel stack pointer
-    csrw    mscratch, sp      # mscratch gets original sp
-    mv      sp, t8           # sp now points to kernel stack
     
-    addi    sp, sp, -120
-
+__mtrap:
+    csrrw   t0, mscratch, sp
+    mv      sp, t0
+    addi    sp, sp, -124
     sw      ra,   0(sp)
-    sw      gp,   4(sp)
-    sw      tp,   8(sp)
-    sw      t0,  12(sp)
-    sw      t1,  16(sp)
-    sw      t2,  20(sp)
-    sw      s0,  24(sp)
-    sw      s1,  28(sp)
-    sw      a0,  32(sp)
-    sw      a1,  36(sp)
-    sw      a2,  40(sp)
-    sw      a3,  44(sp)
-    sw      a4,  48(sp)
-    sw      a5,  52(sp)
-    sw      a6,  56(sp)
-    sw      a7,  60(sp)
-    sw      s2,  64(sp)
-    sw      s3,  68(sp)
-    sw      s4,  72(sp)
-    sw      s5,  76(sp)
-    sw      s6,  80(sp)
-    sw      s7,  84(sp)
-    sw      s8,  88(sp)
-    sw      s9,  92(sp)
-    sw      s10, 96(sp)
-    sw      s11,100(sp)
-    sw      t3, 104(sp)
-    sw      t4, 108(sp)
-    sw      t5, 112(sp)
-    sw      t6, 116(sp)
-
-    # --- Examine the exception ---
-    csrr    t0, mcause          # t0 = mcause
-    li      t1, 0x7FFFFFFF      # Mask to clear interrupt bit
-    and     t0, t0, t1          # t0 now holds the exception code
-    li      t1, 4             # Misaligned load exception code (4)
-    bne     t0, t1, call_terminate  # Not misaligned load? Jump to terminate
-
-    # --- Check that the faulting instruction is an lw ---
-    csrr    t2, mepc          # t2 = address of faulting instruction
-    lw      t3, 0(t2)         # t3 = faulting instruction word
-
-    # Check opcode (bits [6:0] should be 0x03 for load instructions)
-    andi    t4, t3, 0x7F
-    li      t5, 0x03
-    bne     t4, t5, call_terminate
-
-    # Check funct3 field (bits [14:12] should equal 2 for lw)
-    srli    t4, t3, 12
-    andi    t4, t4, 0x7
-    li      t5, 2
-    bne     t4, t5, call_terminate
-
-    # --- We have a misaligned lw. Determine the destination register ---
-    # (rd is in bits [11:7])
-    srli    t4, t3, 7
-    andi    t4, t4, 0x1F     # t4 = destination register (rd)
-    # If rd is 0 (or 2, which is sp and not saved), we do nothing.
-    beqz    t4, misaligned_done
-    li      t5, 2
-    beq     t4, t5, misaligned_done
-
-    # Compute offset into saved register block.
-    # Our saved order: x1 (rd==1) is at offset 0; for registers >2, use: offset = (rd - 2)*4.
-    addi    t5, t4, -2       # t5 = rd - 2
-    slli    t5, t5, 2        # t5 = (rd - 2) * 4
-
+    csrr    t1, mscratch
+    sw      t1,   4(sp)
+    sw      gp,   8(sp)
+    sw      tp,  12(sp)
+    sw      t0,  16(sp)
+    sw      t1,  20(sp)
+    sw      t2,  24(sp)
+    sw      s0,  28(sp)
+    sw      s1,  32(sp)
+    sw      a0,  36(sp)
+    sw      a1,  40(sp)
+    sw      a2,  44(sp)
+    sw      a3,  48(sp)
+    sw      a4,  52(sp)
+    sw      a5,  56(sp)
+    sw      a6,  60(sp)
+    sw      a7,  64(sp)
+    sw      s2,  68(sp)
+    sw      s3,  72(sp)
+    sw      s4,  76(sp)
+    sw      s5,  80(sp)
+    sw      s6,  84(sp)
+    sw      s7,  88(sp)
+    sw      s8,  92(sp)
+    sw      s9,  96(sp)
+    sw      s10, 100(sp)
+    sw      s11, 104(sp)
+    sw      t3, 108(sp)
+    sw      t4, 112(sp)
+    sw      t5, 116(sp)
+    sw      t6, 120(sp)
+    csrr    t3, mcause
+    li      t4, 4
+    bne     t3, t4, trap_unhandled
+    csrr    t5, mepc
+    lw      t6, 0(t5)
+    andi    t7, t6, 0x7F
+    li      t0, 0x03
+    bne     t7, t0, trap_unhandled
+    srli    t7, t6, 12
+    andi    t7, t7, 0x7
+    li      t0, 0x2
+    bne     t7, t0, trap_unhandled
+    csrr    t8, mtval
+    lbu     t9, 0(t8)
+    lbu     t10, 1(t8)
+    lbu     t11, 2(t8)
+    lbu     t12, 3(t8)
+    slli    t10, t10, 8
+    slli    t11, t11, 16
+    slli    t12, t12, 24
+    or      t9, t9, t10
+    or      t9, t9, t11
+    or      t9, t9, t12
+    srli    t7, t6, 7
+    andi    t7, t7, 0x1F
+    beqz    t7, misaligned_done
+    li      t0, 2
+    beq     t7, t0, update_x2
+    addi    t0, t7, -1
+    slli    t0, t0, 2
+    add     t0, sp, t0
+    sw      t9, 0(t0)
+    j       misaligned_done
+update_x2:
+    sw      t9, 4(sp)
 misaligned_done:
-    # --- Perform misaligned load as 4 separate byte loads ---
-    csrr    t6, mtval         # t6 = faulting memory address (misaligned)
-    lbu     t7, 0(t6)         # Load byte 0 (LSB)
-    lbu     t8, 1(t6)         # Load byte 1
-    lbu     t9, 2(t6)         # Load byte 2
-    lbu     t0, 3(t6)         # Load byte 3 (MSB)
-
-    slli    t0, t0, 24       # Shift byte3 to bits 31:24
-    slli    t9, t9, 16       # Shift byte2 to bits 23:16
-    slli    t8, t8, 8        # Shift byte1 to bits 15:8
-    or      t7, t7, t8       # t7 = byte0 | (byte1 << 8)
-    or      t7, t7, t9       # t7 |= (byte2 << 16)
-    or      t7, t7, t0       # t7 now holds the assembled 32-bit word
-
-    # --- Patch the destination register in our saved register block ---
-    # Only update if rd was not 0 or 2.
-    bnez    t4, update_reg
-    j       skip_update_reg
-update_reg:
-    add     t5, sp, t5       # Compute address of saved register in our block
-    sw      t7, 0(t5)        # Overwrite saved value with our loaded word
-skip_update_reg:
-
-    # --- Advance mepc by 4 so that the faulting lw is skipped ---
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
-
-    # --- Restore registers and return via mret ---
-restore_and_return:
-    lw      t6, 116(sp)      # Restore registers in reverse order:
-    lw      t5, 112(sp)
-    lw      t4, 108(sp)
-    lw      t3, 104(sp)
-    lw      s11,100(sp)
-    lw      s10, 96(sp)
-    lw      s9,  92(sp)
-    lw      s8,  88(sp)
-    lw      s7,  84(sp)
-    lw      s6,  80(sp)
-    lw      s5,  76(sp)
-    lw      s4,  72(sp)
-    lw      s3,  68(sp)
-    lw      s2,  64(sp)
-    lw      a7,  60(sp)
-    lw      a6,  56(sp)
-    lw      a5,  52(sp)
-    lw      a4,  48(sp)
-    lw      a3,  44(sp)
-    lw      a2,  40(sp)
-    lw      a1,  36(sp)
-    lw      a0,  32(sp)
-    lw      s1,  28(sp)
-    lw      s0,  24(sp)
-    lw      t2,  20(sp)
-    lw      t1,  16(sp)
-    lw      t0,  12(sp)
-    lw      tp,   8(sp)
-    lw      gp,   4(sp)
+    lw      t6, 120(sp)
+    lw      t5, 116(sp)
+    lw      t4, 112(sp)
+    lw      t3, 108(sp)
+    lw      s11, 104(sp)
+    lw      s10, 100(sp)
+    lw      s9,  96(sp)
+    lw      s8,  92(sp)
+    lw      s7,  88(sp)
+    lw      s6,  84(sp)
+    lw      s5,  80(sp)
+    lw      s4,  76(sp)
+    lw      s3,  72(sp)
+    lw      s2,  68(sp)
+    lw      a7,  64(sp)
+    lw      a6,  60(sp)
+    lw      a5,  56(sp)
+    lw      a4,  52(sp)
+    lw      a3,  48(sp)
+    lw      a2,  44(sp)
+    lw      a1,  40(sp)
+    lw      a0,  36(sp)
+    lw      s1,  32(sp)
+    lw      s0,  28(sp)
+    lw      t2,  24(sp)
+    lw      t1,  20(sp)
+    lw      t0,  16(sp)
+    lw      tp,  12(sp)
+    lw      gp,   8(sp)
+    lw      t1,   4(sp)
     lw      ra,   0(sp)
-    addi    sp,   sp, 120
+    addi    sp, sp, 124
+    csrrw   t0, mscratch, sp
+    mv      sp, t0
+    mret
+trap_unhandled:
+    addi    sp, sp, 124
+    j       terminate
 
-    # Swap back sp and mscratch
-    csrr    t8, mscratch
-    csrw    mscratch, sp
-    mv      sp, t8
 
-    mret                    # Return to faulting program
-
-    # --- If not a misaligned lw, jump to the terminate routine ---
-call_terminate:
-    lw      t6, 116(sp)
-    lw      t5, 112(sp)
-    lw      t4, 108(sp)
-    lw      t3, 104(sp)
-    lw      s11,100(sp)
-    lw      s10, 96(sp)
-    lw      s9,  92(sp)
-    lw      s8,  88(sp)
-    lw      s7,  84(sp)
-    lw      s6,  80(sp)
-    lw      s5,  76(sp)
-    lw      s4,  72(sp)
-    lw      s3,  68(sp)
-    lw      s2,  64(sp)
-    lw      a7,  60(sp)
-    lw      a6,  56(sp)
-    lw      a5,  52(sp)
-    lw      a4,  48(sp)
-    lw      a3,  44(sp)
-    lw      a2,  40(sp)
-    lw      a1,  36(sp)
-    lw      a0,  32(sp)
-    lw      s1,  28(sp)
-    lw      s0,  24(sp)
-    lw      t2,  20(sp)
-    lw      t1,  16(sp)
-    lw      t0,  12(sp)
-    lw      tp,   8(sp)
-    lw      gp,   4(sp)
-    lw      ra,   0(sp)
-    addi    sp,   sp, 120
-
-    csrr    t8, mscratch
-    csrw    mscratch, sp
-    mv      sp, t8
-
-    j       terminate         # Jump to the default terminate routine
-
+	
+	
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
