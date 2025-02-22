@@ -128,16 +128,15 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
-	.globl __mtrap
+	
 __mtrap:
-	# 交换 sp 和 mscratch：
-	# 使 sp 变为内核栈指针，mscratch 保存用户 sp
+	# 交换 sp 与 mscratch，使 sp 变为内核栈指针，mscratch 保存用户 sp
 	csrrw	sp, mscratch, sp
 
 	# 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 30×4 = 120 字节
 	addi	sp, sp, -120
 
-	# 按固定顺序保存寄存器：
+	# 按固定顺序保存寄存器
 	sw	ra,   0(sp)		# 保存 ra (x1)
 	sw	gp,   4(sp)		# 保存 gp (x3)
 	sw	tp,   8(sp)		# 保存 tp (x4)
@@ -174,7 +173,7 @@ __mtrap:
 	li		t1, 4
 	bne		t0, t1, trap_other
 
-	# 从 mepc 获取导致异常的指令地址，并取出指令字
+	# 从 mepc 取出出错指令地址，并加载指令字
 	csrr	t0, mepc		# t0 = 出错指令地址
 	lw		t1, 0(t0)		# t1 = 指令字
 
@@ -192,11 +191,10 @@ __mtrap:
 	# 提取目标寄存器号 rd（位 [11:7]）
 	srai	t4, t1, 7
 	andi	t4, t4, 0x1F	# t4 = rd
-	beq		t4, zero, trap_other	# 若 rd 为 0，无须修补
+	beq		t4, zero, trap_other	# 若 rd 为 0，则无须修补
 	li		t2, 2
 	beq		t4, t2, trap_other	# 若 rd 为 sp (x2)，不处理
-
-	# 如果 rd==1，则偏移量为 0；否则偏移量 = (rd - 2) * 4
+	# 若 rd == 1，则补丁偏移为 0；否则，偏移 = (rd - 2) * 4
 	li		t2, 1
 	beq		t4, t2, update_reg_offset
 	addi	t2, t4, -2
@@ -205,34 +203,37 @@ __mtrap:
 update_reg_offset:
 	li		t2, 0
 update_reg_done:
-	add		t2, sp, t2		# t2 指向 trap frame 中保存的目标寄存器位置
+	# t2 现在是补丁偏移，将其加到当前 sp 上得到 trap frame 中对应保存目标寄存器的位置
+	add		t2, sp, t2
+	# 保存该地址到 a7 寄存器（后续将用 a7 来存放修补后的数据）
+	mv		a7, t2
 
-	# 利用四次 lbu 重构 misaligned load 的 32 位数据
+	# 利用四次 lbu 重构 misaligned lw 的 32 位数据
 	csrr	t5, mtval		# t5 = 出错的内存地址
-	lbu		t6, 0(t5)		# 加载字节0
+	lbu		t6, 0(t5)		# 加载字节0到 t6
 	addi	t0, t5, 1		# 计算字节1的地址
-	lbu		t7, 0(t0)		# 加载字节1
+	lbu		t1, 0(t0)		# 加载字节1到 t1
 	addi	t0, t5, 2		# 计算字节2的地址
-	lbu		t8, 0(t0)		# 加载字节2
+	lbu		t2, 0(t0)		# 加载字节2到 t2
 	addi	t0, t5, 3		# 计算字节3的地址
-	lbu		t9, 0(t0)		# 加载字节3
+	lbu		t3, 0(t0)		# 加载字节3到 t3
 
-	slli	t7, t7, 8
-	slli	t8, t8, 16
-	slli	t9, t9, 24
-	or		t6, t6, t7
-	or		t6, t6, t8
-	or		t6, t6, t9
+	slli	t1, t1, 8
+	slli	t2, t2, 16
+	slli	t3, t3, 24
+	or		t6, t6, t1
+	or		t6, t6, t2
+	or		t6, t6, t3
 
-	# 将重构后的数据写入 trap frame 中对应目标寄存器的位置
-	sw		t6, 0(t2)
+	# 将重构后的数据写入 trap frame 中目标寄存器的保存位置
+	sw		t6, 0(a7)
 
-	# 更新 mepc，使其跳过出错指令（加 4）
+	# 更新 mepc 使其指向下一条指令
 	csrr	t0, mepc
 	addi	t0, t0, 4
 	csrw	mepc, t0
 
-	# 从 trap frame 中恢复所有寄存器
+	# 从 trap frame 恢复所有寄存器
 	lw		ra,   0(sp)
 	lw		gp,   4(sp)
 	lw		tp,   8(sp)
@@ -263,21 +264,17 @@ update_reg_done:
 	lw		s9, 108(sp)
 	lw		s10,112(sp)
 	lw		s11,116(sp)
-
-	addi	sp, sp, 120		# 释放 trap frame 空间
+	addi	sp, sp, 120
 
 	# 恢复用户 sp：将 mscratch 中的值交换回 sp
 	csrrw	sp, mscratch, sp
 
-	mret				# 返回异常发生处继续执行
+	mret
 
 trap_other:
-	addi	sp, sp, 120		# 释放 trap frame 空间
-	csrrw	sp, mscratch, sp	# 恢复用户 sp
+	addi	sp, sp, 120
+	csrrw	sp, mscratch, sp
 	j		terminate
-
-
-
 
 
 
