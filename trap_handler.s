@@ -105,11 +105,8 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
     
 __mtrap:
-    # 1. 交换 sp 和 mscratch，使 sp 指向内核栈
-    csrrw sp, mscratch, sp  
-
-    # 2. 保存所有寄存器
-    addi sp, sp, -72
+    # 保存上下文
+    addi sp, sp, -32
     sw ra, 0(sp)
     sw t0, 4(sp)
     sw t1, 8(sp)
@@ -118,63 +115,34 @@ __mtrap:
     sw t4, 20(sp)
     sw t5, 24(sp)
     sw t6, 28(sp)
-    sw a0, 32(sp)
-    sw a1, 36(sp)
-    sw a2, 40(sp)
-    sw a3, 44(sp)
-    sw a4, 48(sp)
-    sw a5, 52(sp)
-    sw a6, 56(sp)
-    sw a7, 60(sp)
-    sw s0, 64(sp)
-    sw s1, 68(sp)
 
-    # 3. 读取 mcause 并检查是否是 Misaligned Load Address (4)
+    # 读取 mcause，检查是否为 Misaligned Load 异常
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, terminate   # 不是 Misaligned Load，直接跳到 terminate
+    bne t0, t1, terminate
 
-    # 4. 读取 mepc 处的指令，检查是否是 lw 指令
-    csrr t0, mepc           
-    lw t1, 0(t0)            
+    # 读取 mtval，获取异常地址
+    csrr t2, mtval
 
-    # 5. 检查是否 lw (opcode 0x00002003)
-    li t2, 0x00002003       
-    and t3, t1, t2
-    bne t3, t2, terminate   # 不是 lw，跳到 terminate
+    # 从异常地址读取字节数据
+    lbu t3, 0(t2)   # 读取第1字节（最低位）
+    lbu t4, 1(t2)   # 读取第2字节
+    lbu t5, 2(t2)   # 读取第3字节
+    lbu t6, 3(t2)   # 读取第4字节（最高位）
 
-    # 6. 获取未对齐的地址
-    csrr t4, mtval
+    # 组合成32位数据
+    slli t4, t4, 8
+    slli t5, t5, 16
+    slli t6, t6, 24
+    or t3, t3, t4
+    or t3, t3, t5
+    or t3, t3, t6
 
-    # 7. 解析 lw 目标寄存器 (rd)
-    srli t5, t1, 7            
-    andi t5, t5, 0x1F        
+    # 将组合的数据写入目标寄存器
+    # 假设目标寄存器为 a0
+    mv a0, t3
 
-    # 8. **修正 `lbu` 读取顺序（确保 Little-Endian 规范）**
-    lbu t6, 0(t4)  # 读取最低字节（offset 0）
-    lbu t3, 1(t4)  # 读取次低字节（offset 1）
-    slli t3, t3, 8
-    or t6, t6, t3
-
-    lbu t3, 2(t4)  # 读取次高字节（offset 2）
-    slli t3, t3, 16
-    or t6, t6, t3
-
-    lbu t3, 3(t4)  # 读取最高字节（offset 3）
-    slli t3, t3, 24
-    or t6, t6, t3
-
-    # 9. **修正存储 (确保 rd 对齐)**
-    slli t5, t5, 2       # ✅ t5 * 4，确保存储地址是 4 字节对齐
-    addi t3, sp, 32
-    add t3, t3, t5
-    sw t6, 0(t3)         # ✅ 现在 t3 100% 是对齐地址
-
-    # 10. 跳过错误指令
-    addi t0, t0, 4
-    csrw mepc, t0
-
-    # 11. 恢复所有寄存器
+    # 恢复上下文
     lw ra, 0(sp)
     lw t0, 4(sp)
     lw t1, 8(sp)
@@ -183,24 +151,10 @@ __mtrap:
     lw t4, 20(sp)
     lw t5, 24(sp)
     lw t6, 28(sp)
-    lw a0, 32(sp)
-    lw a1, 36(sp)
-    lw a2, 40(sp)
-    lw a3, 44(sp)
-    lw a4, 48(sp)
-    lw a5, 52(sp)
-    lw a6, 56(sp)
-    lw a7, 60(sp)
-    lw s0, 64(sp)
-    lw s1, 68(sp)
+    addi sp, sp, 32
 
-    # 12. 释放栈空间并恢复 sp
-    addi sp, sp, 72
-    csrrw sp, mscratch, sp
-
-    # 13. 继续执行程序
+    # 返回
     mret
-
 	
 	
 # This code is taken from the default VRV system code.  It prints out
