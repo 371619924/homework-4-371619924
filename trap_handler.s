@@ -131,198 +131,155 @@ __mstart:
 	
   	
     
-	.globl __mtrap
+     .globl __mtrap
 __mtrap:
-	csrrw   sp, mscratch, sp
-	addi    sp, sp, -120
-	sw      ra,   0(sp)
-	sw      gp,   4(sp)
-	sw      tp,   8(sp)
-	sw      t0,  12(sp)
-	sw      t1,  16(sp)
-	sw      t2,  20(sp)
-	sw      s0,  24(sp)
-	sw      s1,  28(sp)
-	sw      a0,  32(sp)
-	sw      a1,  36(sp)
-	sw      a2,  40(sp)
-	sw      a3,  44(sp)
-	sw      a4,  48(sp)
-	sw      a5,  52(sp)
-	sw      a6,  56(sp)
-	sw      a7,  60(sp)
-	sw      s2,  64(sp)
-	sw      s3,  68(sp)
-	sw      s4,  72(sp)
-	sw      s5,  76(sp)
-	sw      s6,  80(sp)
-	sw      s7,  84(sp)
-	sw      s8,  88(sp)
-	sw      s9,  92(sp)
-	sw      s10, 96(sp)
-	sw      s11,100(sp)
-	sw      t3,104(sp)
-	sw      t4,108(sp)
-	sw      t5,112(sp)
-	sw      t6,116(sp)
-	csrr    t0, mcause
-	li      t1, 4
-	beq     t0, t1, handle_load
-	li      t1, 6
-	beq     t0, t1, handle_store
-	li      t1, 0
-	beq     t0, t1, handle_fetch
-	j       common_restore
-handle_load:
-	csrr    t0, mepc
-	lw      t1, 0(t0)
-	andi    t2, t1, 0x7F
-	li      t3, 0x03
-	bne     t2, t3, common_restore
-	srai    t2, t1, 12
-	andi    t2, t2, 0x7
-	li      t3, 0x2
-	bne     t2, t3, common_restore
-	srai    t4, t1, 7
-	andi    t4, t4, 0x1F
-	li      t2, 2
-	beq     t4, t2, common_restore
-	bnez    t4, patch_load
-	j       skip_load_patch
-patch_load:
-	li      t2, 1
-	beq     t4, t2, set_offset_load_zero
-	addi    t2, t4, -2
-	slli    t2, t2, 2
-	j       done_load_offset
-set_offset_load_zero:
-	li      t2, 0
-done_load_offset:
-	add     t2, sp, t2
-	mv      a7, t2
-	csrr    t5, mtval
-	lbu     t6, 0(t5)
-	addi    t0, t5, 1
-	lbu     t1, 0(t0)
-	addi    t0, t5, 2
-	lbu     t2, 0(t0)
-	addi    t0, t5, 3
-	lbu     t3, 0(t0)
-	slli    t1, t1, 8
-	slli    t2, t2, 16
-	slli    t3, t3, 24
-	or      t6, t6, t1
-	or      t6, t6, t2
-	or      t6, t6, t3
-	sw      t6, 0(a7)
-skip_load_patch:
-	csrr    t0, mepc
-	addi    t0, t0, 4
-	csrw    mepc, t0
-	j       common_restore
-handle_store:
-	csrr    t0, mepc
-	lw      t1, 0(t0)
-	andi    t2, t1, 0x7F
-	li      t3, 0x23
-	bne     t2, t3, common_restore
-	srai    t2, t1, 12
-	andi    t2, t2, 0x7
-	li      t3, 0x2
-	bne     t2, t3, common_restore
-	srai    t4, t1, 20
-	andi    t4, t4, 0x1F
-	li      t5, 2
-	beq     t4, t5, common_restore
-	bnez    t4, store_patch
-	li      t6, 0
-	j       do_store_patch
-store_patch:
-	li      t5, 1
-	beq     t4, t5, set_offset_store_zero
-	addi    t5, t4, -2
-	slli    t5, t5, 2
-	j       done_store_offset
-set_offset_store_zero:
-	li      t5, 0
-done_store_offset:
-	add     t5, sp, t5
-	lw      t6, 0(t5)
-do_store_patch:
-	csrr    t5, mtval
-	andi    t1, t6, 0xFF
-	srli    t2, t6, 8
-	andi    t2, t2, 0xFF
-	srli    t3, t6, 16
-	andi    t3, t3, 0xFF
-	srli    t4, t6, 24
-	andi    t4, t4, 0xFF
-	sb      t1, 0(t5)
-	addi    t5, t5, 1
-	sb      t2, 0(t5)
-	addi    t5, t5, 1
-	sb      t3, 0(t5)
-	addi    t5, t5, 1
-	sb      t4, 0(t5)
-	csrr    t0, mepc
-	addi    t0, t0, 4
-	csrw    mepc, t0
-	j       common_restore
-handle_fetch:
-	csrr    t0, mtval
-	lbu     t1, 0(t0)
-	addi    t0, t0, 1
-	lbu     t2, 0(t0)
-	addi    t0, t0, 1
-	lbu     t3, 0(t0)
-	addi    t0, t0, 1
-	lbu     t4, 0(t0)
-	slli    t2, t2, 8
-	slli    t3, t3, 16
-	slli    t4, t4, 24
-	or      t1, t1, t2
-	or      t1, t1, t3
-	or      t1, t1, t4
-	csrr    t0, mepc
-	sw      t1, 0(t0)
-	addi    t0, t0, 4
-	csrw    mepc, t0
-	j       common_restore
-common_restore:
-	lw      ra,   0(sp)
-	lw      gp,   4(sp)
-	lw      tp,   8(sp)
-	lw      t0,  12(sp)
-	lw      t1,  16(sp)
-	lw      t2,  20(sp)
-	lw      s0,  24(sp)
-	lw      s1,  28(sp)
-	lw      a0,  32(sp)
-	lw      a1,  36(sp)
-	lw      a2,  40(sp)
-	lw      a3,  44(sp)
-	lw      a4,  48(sp)
-	lw      a5,  52(sp)
-	lw      a6,  56(sp)
-	lw      a7,  60(sp)
-	lw      s2,  64(sp)
-	lw      s3,  68(sp)
-	lw      s4,  72(sp)
-	lw      s5,  76(sp)
-	lw      s6,  80(sp)
-	lw      s7,  84(sp)
-	lw      s8,  88(sp)
-	lw      s9,  92(sp)
-	lw      s10, 96(sp)
-	lw      s11,100(sp)
-	lw      t3,104(sp)
-	lw      t4,108(sp)
-	lw      t5,112(sp)
-	lw      t6,116(sp)
-	addi    sp, sp, 120
-	csrrw   sp, mscratch, sp
-	mret
+    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    csrrw   sp, mscratch, sp
 
+    # 分配 trap frame 空间，保存 30 个寄存器
+    addi    sp, sp, -120
+
+    # 保存所有寄存器
+    sw      ra,   0(sp)
+    sw      gp,   4(sp)
+    sw      tp,   8(sp)
+    sw      t0,  12(sp)
+    sw      t1,  16(sp)
+    sw      t2,  20(sp)
+    sw      s0,  24(sp)
+    sw      s1,  28(sp)
+    sw      a0,  32(sp)
+    sw      a1,  36(sp)
+    sw      a2,  40(sp)
+    sw      a3,  44(sp)
+    sw      a4,  48(sp)
+    sw      a5,  52(sp)
+    sw      a6,  56(sp)
+    sw      a7,  60(sp)
+    sw      s2,  64(sp)
+    sw      s3,  68(sp)
+    sw      s4,  72(sp)
+    sw      s5,  76(sp)
+    sw      s6,  80(sp)
+    sw      s7,  84(sp)
+    sw      s8,  88(sp)
+    sw      s9,  92(sp)
+    sw      s10, 96(sp)
+    sw      s11,100(sp)
+    sw      t3,104(sp)
+    sw      t4,108(sp)
+    sw      t5,112(sp)
+    sw      t6,116(sp)
+
+    # 读取异常原因
+    csrr    t0, mcause
+    li      t1, 4   # Misaligned Load
+    beq     t0, t1, misaligned_load
+
+    li      t1, 6   # Misaligned Store
+    beq     t0, t1, misaligned_store
+
+    # 其他异常，跳转到 terminate
+    j       trap_other
+
+# 处理 misaligned load
+misaligned_load:
+    csrr    t0, mepc      # 获取异常指令地址
+    lw      t1, 0(t0)     # 获取指令字
+    csrr    t2, mtval     # 获取出错的有效地址
+    lbu     t3, 0(t2)     # 读取低位字节
+    lbu     t4, 1(t2)
+    lbu     t5, 2(t2)
+    lbu     t6, 3(t2)
+
+    slli    t4, t4, 8
+    slli    t5, t5, 16
+    slli    t6, t6, 24
+    or      t3, t3, t4
+    or      t3, t3, t5
+    or      t3, t3, t6
+
+    # 找到目标寄存器 rd
+    srai    t4, t1, 7
+    andi    t4, t4, 0x1F
+
+    # 计算目标寄存器在 trap frame 中的偏移量
+    slli    t4, t4, 2
+    add     t4, sp, t4
+    sw      t3, 0(t4)
+
+    # 更新 mepc 跳过出错指令
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    j       restore_registers
+
+# 处理 misaligned store
+misaligned_store:
+    csrr    t0, mepc      # 获取异常指令地址
+    lw      t1, 0(t0)     # 获取指令字
+    csrr    t2, mtval     # 获取出错的有效地址
+
+    # 计算目标寄存器 rs2
+    srai    t4, t1, 20
+    andi    t4, t4, 0x1F
+    slli    t4, t4, 2
+    add     t4, sp, t4
+    lw      t5, 0(t4)     # 获取存储的数据
+
+    # 拆分 4 个字节存入内存
+    sb      t5, 0(t2)
+    srli    t5, t5, 8
+    sb      t5, 1(t2)
+    srli    t5, t5, 8
+    sb      t5, 2(t2)
+    srli    t5, t5, 8
+    sb      t5, 3(t2)
+
+    # 更新 mepc 跳过出错指令
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    j       restore_registers
+
+# 恢复寄存器并返回
+restore_registers:
+    lw      ra,   0(sp)
+    lw      gp,   4(sp)
+    lw      tp,   8(sp)
+    lw      t0,  12(sp)
+    lw      t1,  16(sp)
+    lw      t2,  20(sp)
+    lw      s0,  24(sp)
+    lw      s1,  28(sp)
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    lw      s2,  64(sp)
+    lw      s3,  68(sp)
+    lw      s4,  72(sp)
+    lw      s5,  76(sp)
+    lw      s6,  80(sp)
+    lw      s7,  84(sp)
+    lw      s8,  88(sp)
+    lw      s9,  92(sp)
+    lw      s10, 96(sp)
+    lw      s11,100(sp)
+    lw      t3,104(sp)
+    lw      t4,108(sp)
+    lw      t5,112(sp)
+    lw      t6,116(sp)
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
+    mret
+
+trap_other:
+    j       terminate
 
 
 
