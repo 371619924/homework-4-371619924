@@ -300,7 +300,11 @@ restore_and_return:
     csrrw   sp, mscratch, sp
 
     mret
-
+    
+trap_other:
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
+    j       terminate
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
