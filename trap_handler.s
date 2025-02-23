@@ -128,17 +128,18 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
+	
+  	
 .globl __mtrap
 __mtrap:
-    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    # 交换 sp 与 mscratch，使 sp 指向内核栈
     csrrw   sp, mscratch, sp
 
-    # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 120 字节
+    # 为 trap frame 分配 120 字节空间，保存 x1, x3~x31
     addi    sp, sp, -120
-    # 按要求保存寄存器，顺序：x1, x3, x4, …, x31
-    sw      ra,   0(sp)      # x1 (ra)
-    sw      gp,   4(sp)      # x3 (gp)
-    sw      tp,   8(sp)      # x4 (tp)
+    sw      ra,   0(sp)       # x1 (ra)
+    sw      gp,   4(sp)       # x3 (gp)
+    sw      tp,   8(sp)       # x4 (tp)
     sw      t0,  12(sp)      # x5 (t0)
     sw      t1,  16(sp)      # x6 (t1)
     sw      t2,  20(sp)      # x7 (t2)
@@ -167,44 +168,39 @@ __mtrap:
     sw      t5,112(sp)       # x30 (t5)
     sw      t6,116(sp)       # x31 (t6)
 
-    # 检查异常类型：
+    # 检查异常代码：允许 mcause 为 4 或 5 时处理 misaligned lw
     csrr    t0, mcause
-    li      t1, 4             # Misaligned load (0x04)
-    li      t2, 5             # Load access fault (0x05)
-    li      t3, 6             # Misaligned store (0x06)
+    li      t1, 4
+    beq     t0, t1, handle_load
+    li      t1, 5
+    beq     t0, t1, handle_load
+    j       trap_other
 
-    # 处理 Misaligned Load
-    beq     t0, t1, handle_misaligned_load
+handle_load:
+    # 可选检查：若 mepc 为 0 则无法处理，跳转到 trap_other
+    csrr    t0, mepc
+    beqz    t0, trap_other
 
-    # 处理 Load Access Fault (0x05)
-    beq     t0, t2, handle_load_access_fault
+    # 从 mepc 处取出故障指令
+    lw      t1, 0(t0)
 
-    # 处理 Misaligned Store (0x06)
-    beq     t0, t3, handle_misaligned_store
-
-    # 其他异常，跳转到终止处理
-    j       terminate
-
-# 处理 Misaligned Load 异常（保持不变）
-handle_misaligned_load:
-    csrr    t0, mepc         # 获取出错的指令地址
-    lw      t1, 0(t0)        # 获取出错的指令字
-
-    andi    t2, t1, 0x7F     # 获取 opcode（低7位）
-    li      t3, 0x03         # lw 指令 opcode
+    # 检查 opcode（低 7 位）是否为 0x03（load 指令）
+    andi    t2, t1, 0x7F
+    li      t3, 0x03
     bne     t2, t3, trap_other
 
-    srai    t2, t1, 12       # 获取 funct3（位 12-14）
+    # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+    srai    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 0x2          # lw 指令 funct3 应为 0x2
+    li      t3, 0x2
     bne     t2, t3, trap_other
 
-    # 提取目标寄存器号 rd（位 7-11）
+    # 提取目标寄存器号 rd（位 11:7）
     srai    t4, t1, 7
     andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other    # rd 为0时不修补
+    beq     t4, zero, trap_other       # 若 rd 为 0，不补丁
     li      t2, 2
-    beq     t4, t2, trap_other      # 如果 rd 是 sp (x2) 不修补
+    beq     t4, t2, trap_other         # 若 rd 为 sp (x2)，不处理
     li      t2, 1
     beq     t4, t2, update_offset
     addi    t2, t4, -2
@@ -213,18 +209,19 @@ handle_misaligned_load:
 update_offset:
     li      t2, 0
 done_offset:
-    add     t2, sp, t2       # t2 指向 trap frame 中目标寄存器槽
-    mv      a7, t2          # 保存该地址到 a7
+    add     t2, sp, t2     # t2 指向 trap frame 中目的寄存器槽
+    mv      a7, t2       # 保存该地址以便写入补丁数据
 
-    # 重构 misaligned load 数据：从 mtval 开始连续加载 4 字节
-    csrr    t5, mtval       # 获取错误地址
-    lbu     t6, 0(t5)
+    # 重构 misaligned lw 数据：从 mtval 中加载连续 4 字节
+    csrr    t5, mtval      # t5 = 故障访问地址
+    lbu     t6, 0(t5)      # 加载字节0
     addi    t0, t5, 1
-    lbu     t1, 0(t0)
+    lbu     t1, 0(t0)      # 加载字节1
     addi    t0, t5, 2
-    lbu     t2, 0(t0)
+    lbu     t2, 0(t0)      # 加载字节2
     addi    t0, t5, 3
-    lbu     t3, 0(t0)
+    lbu     t3, 0(t0)      # 加载字节3
+
     slli    t1, t1, 8
     slli    t2, t2, 16
     slli    t3, t3, 24
@@ -232,38 +229,15 @@ done_offset:
     or      t6, t6, t2
     or      t6, t6, t3
 
-    sw      t6, 0(a7)       # 写回修复后的数据
+    # 将重构的结果写入 trap frame 中目标寄存器保存位置
+    sw      t6, 0(a7)
 
-    # 更新 mepc 跳过出错指令（+4）
+    # 更新 mepc，跳过 faulting 指令（4 字节）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    j       restore_and_return
-
-# 修改重点：针对 badjump 测试的 Load Access Fault 处理
-handle_load_access_fault:
-    # 使用 mtval 检查出错的地址是否为 0x00000000
-    csrr    t0, mtval       # 获取导致 fault 的地址
-    li      t1, 0x0
-    beq     t0, t1, terminate  # 如果 fault 地址为 0，则直接终止（防止空指针加载）
-    # 否则，打印错误信息后终止
-    la      a0, __e5        # __e5 存储 " [Load access fault]"
-    li      a7, PRINT_STR
-    ecall
-    j       terminate
-
-handle_misaligned_store:
-    la      a0, __e6        # __e6 存储 " [Misaligned store address]"
-    li      a7, PRINT_STR
-    ecall
-    j       terminate
-
-trap_other:
-    j       terminate
-
-restore_and_return:
-    # 恢复保存的寄存器
+    # 按保存顺序恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -296,16 +270,14 @@ restore_and_return:
     lw      t6,116(sp)
     addi    sp, sp, 120
 
-    # 恢复用户 sp：将 mscratch 中保存的用户 sp 换回 sp
+    # 恢复用户 sp：交换 sp 与 mscratch，并返回用户代码
     csrrw   sp, mscratch, sp
-
     mret
 
-terminate:
-    # 调用终止处理（终止程序）
+trap_other:
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
     j       terminate
-
-    
 
 
 # This code is taken from the default VRV system code. It prints out
