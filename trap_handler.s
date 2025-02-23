@@ -185,25 +185,18 @@ handle_misaligned_lw:
     srai    t2, t1, 12
     andi    t2, t2, 0x7
 
-    # 处理 `lw`
+    # 仅处理 `lw` 指令
     li      t3, 2
-    beq     t2, t3, handle_lw
-    # 处理 `lh`
-    li      t3, 1
-    beq     t2, t3, handle_lh
-    # 处理 `lb`
-    li      t3, 0
-    beq     t2, t3, handle_lb
-    j       trap_other
+    bne     t2, t3, trap_other
 
-handle_lw:
+    # 获取错误地址
     csrr    t5, mtval
     andi    t2, t5, 3
     sub     t5, t5, t2
     lw      t0, 0(t5)
     lw      t1, 4(t5)
 
-    # 组合数据
+    # 组合正确的值
     li      t3, 1
     beq     t2, t3, lw_case1
     li      t3, 2
@@ -232,19 +225,58 @@ store_lw:
     sw      t6, 32(sp)  # 存入 `a0`
     j       advance_pc
 
-handle_lh:
-    csrr    t5, mtval
-    andi    t2, t5, 1
-    sub     t5, t5, t2
-    lh      t6, 0(t5)
-    sw      t6, 32(sp)
-    j       advance_pc
+handle_misaligned_sw:
+    csrr    t0, mepc
+    lw      t1, 0(t0)
+    andi    t2, t1, 0x7F
+    li      t3, 0x23
+    bne     t2, t3, trap_other
 
-handle_lb:
+    srai    t2, t1, 12
+    andi    t2, t2, 0x7
+    li      t3, 2
+    bne     t2, t3, trap_other
+
+    # 获取错误地址
     csrr    t5, mtval
-    lb      t6, 0(t5)
-    sw      t6, 32(sp)
-    j       advance_pc
+    andi    t2, t5, 3
+    sub     t5, t5, t2
+
+    # 获取需要存储的值
+    lw      t6, 32(sp)
+
+    # 修复并存储
+    beq     t2, zero, sw_case0
+    li      t3, 1
+    beq     t2, t3, sw_case1
+    li      t3, 2
+    beq     t2, t3, sw_case2
+    li      t3, 3
+    beq     t2, t3, sw_case3
+sw_case0:
+    sw      t6, 0(t5)
+    j       store_done
+sw_case1:
+    srli    t3, t6, 8
+    sb      t3, 1(t5)
+    srli    t3, t6, 16
+    sb      t3, 2(t5)
+    srli    t3, t6, 24
+    sb      t3, 3(t5)
+    j       store_done
+sw_case2:
+    srli    t3, t6, 16
+    sh      t3, 2(t5)
+    j       store_done
+sw_case3:
+    sb      t6, 3(t5)
+    j       store_done
+
+store_done:
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    j       restore_registers
 
 advance_pc:
     csrr    t0, mepc
@@ -264,6 +296,9 @@ restore_registers:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
+
+
+
 
 
 # This code is taken from the default VRV system code. It prints out
