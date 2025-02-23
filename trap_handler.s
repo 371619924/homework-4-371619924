@@ -131,11 +131,12 @@ __mstart:
 	
   	
     
+# trap handler 处理
 __mtrap:
-    csrrw   sp, mscratch, sp        # 交换 sp 与 mscratch
+    csrrw   sp, mscratch, sp        # 交换 sp 和 mscratch
     addi    sp, sp, -120            # 分配 trap frame 空间
 
-    # 保存寄存器
+    # 保存所有寄存器
     sw      ra,   0(sp)
     sw      gp,   4(sp)
     sw      tp,   8(sp)
@@ -167,7 +168,8 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
-    csrr    t0, mcause              # 获取异常类型
+    # 获取异常类型
+    csrr    t0, mcause              # 获取异常原因
     li      t1, 4                    # misaligned load 异常为 4
     li      t2, 6                    # misaligned store 异常为 6
     bne     t0, t1, check_store     # 如果不是 misaligned load，跳到检查 misaligned store
@@ -180,18 +182,18 @@ handle_misaligned_load:
     csrr    t0, mepc                # 获取触发异常的指令地址
     lw      t1, 0(t0)               # 获取触发异常的指令字
 
-    andi    t2, t1, 0x7F            # 检查 opcode 是否为 load 指令
+    andi    t2, t1, 0x7F            # 检查指令是否为 load 操作
     li      t3, 0x03
-    bne     t2, t3, trap_other      # 如果不是 load 指令，跳到其他异常处理
+    bne     t2, t3, trap_other      # 如果不是 load 操作，跳转到其他异常处理
 
     srai    t2, t1, 12              # 检查 funct3 是否为 lw 指令
     andi    t2, t2, 0x7
     li      t3, 0x2
-    bne     t2, t3, trap_other      # 如果不是 lw 指令，跳到其他异常处理
+    bne     t2, t3, trap_other      # 如果不是 lw 指令，跳转到其他异常处理
 
     srai    t4, t1, 7               # 提取目标寄存器号 rd（位 11:7）
     andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other    # 如果 rd 为 0，不补丁
+    beq     t4, zero, trap_other    # 如果 rd 为 0，不做补丁
     li      t2, 2
     beq     t4, t2, trap_other      # 如果 rd 为 sp (x2)，不处理
     li      t2, 1
@@ -277,7 +279,33 @@ handle_valid_addr:
 trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
-    j       terminate
+    la      a0, __m_exc            # 加载异常头部消息
+    li      a7, PRINT_STR          # 打印字符串 syscall
+    ecall
+
+    la      a0, __m_mcause
+    ecall
+    csrr    a0, mcause
+    li      a7, PRINT_HEX
+    ecall
+
+    la      a0, __m_mepc
+    li      a7, PRINT_STR
+    ecall
+    csrr    a0, mepc
+    li      a7, PRINT_HEX
+    ecall
+
+    la      a0, __m_mtval
+    li      a7, PRINT_STR
+    ecall
+    csrr    a0, mtval
+    li      a7, PRINT_HEX
+    ecall
+
+    li      a0, -1
+    li      a7, EXIT
+    ecall
 
 
 
