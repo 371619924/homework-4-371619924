@@ -128,8 +128,6 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
-	
-  	
 __mtrap:
     # Swap stack pointer with mscratch
     mv t0, sp                # Save sp in t0
@@ -183,10 +181,13 @@ handle_misaligned_load:
     lb      t3, 2(t0)           # Load byte 2
     lb      t4, 3(t0)           # Load byte 3
     
-    # Combine the bytes into a single word
-    or      t1, t1, t2, lsl 8   # Combine byte 1 and 2
-    or      t1, t1, t3, lsl 16  # Combine byte 3
-    or      t1, t1, t4, lsl 24  # Combine byte 4
+    # Shift and combine the bytes into a single word
+    slli    t2, t2, 8           # Shift byte 1 by 8 bits
+    or      t1, t1, t2           # Combine byte 0 and byte 1
+    slli    t3, t3, 16          # Shift byte 2 by 16 bits
+    or      t1, t1, t3           # Combine byte 0+1 and byte 2
+    slli    t4, t4, 24          # Shift byte 3 by 24 bits
+    or      t1, t1, t4           # Combine byte 0+1+2 and byte 3
     
     # Store the result in a0 (destination register)
     csrr    t0, mepc            # Load mepc into t0 (current instruction address)
@@ -233,6 +234,8 @@ handle_misaligned_load:
     mret
 
 
+	
+  	
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
