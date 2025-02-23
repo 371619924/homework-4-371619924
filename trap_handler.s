@@ -135,139 +135,172 @@ __mtrap:
     csrw    mscratch, t0      # Store original sp into mscratch
 
     # Save registers (x0-x31)
-    addi    sp, sp, -128      # Allocate space on the stack for saving registers
+    addi    sp, sp, -120      # Allocate space on the stack for saving registers
     sw      ra, 0(sp)
-    sw      s0, 4(sp)
-    sw      s1, 8(sp)
-    sw      s2, 12(sp)
-    sw      s3, 16(sp)
-    sw      s4, 20(sp)
-    sw      s5, 24(sp)
-    sw      s6, 28(sp)
-    sw      s7, 32(sp)
-    sw      s8, 36(sp)
-    sw      s9, 40(sp)
-    sw      s10, 44(sp)
-    sw      s11, 48(sp)
-    sw      t0, 52(sp)
-    sw      t1, 56(sp)
-    sw      t2, 60(sp)
-    sw      t3, 64(sp)
-    sw      t4, 68(sp)
-    sw      t5, 72(sp)
-    sw      t6, 76(sp)
-    sw      a0, 80(sp)
-    sw      a1, 84(sp)
-    sw      a2, 88(sp)
-    sw      a3, 92(sp)
-    sw      a4, 96(sp)
-    sw      a5, 100(sp)
-    sw      a6, 104(sp)
-    sw      a7, 108(sp)
+    sw      gp, 4(sp)
+    sw      tp, 8(sp)
+    sw      t0, 12(sp)
+    sw      t1, 16(sp)
+    sw      t2, 20(sp)
+    sw      s0, 24(sp)
+    sw      s1, 28(sp)
+    sw      a0, 32(sp)
+    sw      a1, 36(sp)
+    sw      a2, 40(sp)
+    sw      a3, 44(sp)
+    sw      a4, 48(sp)
+    sw      a5, 52(sp)
+    sw      a6, 56(sp)
+    sw      a7, 60(sp)
+    sw      s2, 64(sp)
+    sw      s3, 68(sp)
+    sw      s4, 72(sp)
+    sw      s5, 76(sp)
+    sw      s6, 80(sp)
+    sw      s7, 84(sp)
+    sw      s8, 88(sp)
+    sw      s9, 92(sp)
+    sw      s10, 96(sp)
+    sw      s11, 100(sp)
+    sw      t3, 104(sp)
+    sw      t4, 108(sp)
+    sw      t5, 112(sp)
+    sw      t6, 116(sp)
 
-    # Preserve malloc memory, ensure that heap space is saved
-    # We are assuming the heap pointer is stored somewhere, such as mscratch or another register.
-    # In this case, we save the current heap pointer location
-    csrr    t0, mscratch       # Assuming heap pointer is in mscratch
-    sw      t0, 112(sp)        # Save the heap pointer into the stack
+    # 检查异常类型：
+    csrr    t0, mcause
+    li      t1, 4             # Misaligned load (0x04)
+    li      t2, 5             # Load access fault (0x05)
+    li      t3, 6             # Misaligned store (0x06)
+    
+    # 处理 Misaligned Load
+    beq     t0, t1, handle_misaligned_load
 
-    # Check the exception type
-    csrr    t0, mcause          # Load the cause into t0
-    li      t1, 0x04            # Misaligned load word cause
-    li      t2, 0x05            # Load access fault cause
-    li      t3, 0x06            # Misaligned store cause
+    # 处理 Load Access Fault (0x05)
+    beq     t0, t2, handle_load_access_fault
 
-    beq     t0, t1, handle_misaligned_load    # Misaligned load
-    beq     t0, t2, handle_load_access_fault  # Load access fault
-    beq     t0, t3, handle_misaligned_store   # Misaligned store
+    # 处理 Misaligned Store (0x06)
+    beq     t0, t3, handle_misaligned_store
 
-    # If it's not any of these, jump to terminate function
+    # 其他异常，跳转到终止处理
     j       terminate
 
+# 处理 Misaligned Load 异常
 handle_misaligned_load:
-    # Misaligned load handling (same as before)
-    csrr    t0, mtval           # Load the misaligned address into t0
-    lb      t1, 0(t0)           # Load byte 0
-    lb      t2, 1(t0)           # Load byte 1
-    lb      t3, 2(t0)           # Load byte 2
-    lb      t4, 3(t0)           # Load byte 3
-    
-    # Shift and combine the bytes into a single word
-    slli    t2, t2, 8           # Shift byte 1 by 8 bits
-    or      t1, t1, t2           # Combine byte 0 and byte 1
-    slli    t3, t3, 16          # Shift byte 2 by 16 bits
-    or      t1, t1, t3           # Combine byte 0+1 and byte 2
-    slli    t4, t4, 24          # Shift byte 3 by 24 bits
-    or      t1, t1, t4           # Combine byte 0+1+2 and byte 3
-    
-    # Store the result in a0 (destination register)
-    csrr    t0, mepc            # Load mepc into t0 (current instruction address)
-    slli    t0, t0, 2           # Multiply by 4 to get the word offset
-    lw      t5, 0(sp)           # Load destination register index (a0)
-    sw      t1, 0(t5)           # Store the result into the destination register
-    
-    # Increment mepc to the next instruction
+    csrr    t0, mepc         # 获取出错的指令地址
+    lw      t1, 0(t0)        # 获取出错的指令字
+
+    andi    t2, t1, 0x7F     # 获取指令的 opcode (低7位)
+    li      t3, 0x03         # 如果是 lw 指令，opcode 为 0x03
+    bne     t2, t3, trap_other
+
+    srai    t2, t1, 12       # 获取 funct3（低12-14位）
+    andi    t2, t2, 0x7
+    li      t3, 0x2          # 如果是 lw 指令，funct3 为 0x2
+    bne     t2, t3, trap_other
+
+    # 提取 rd (目标寄存器号)
+    srai    t4, t1, 7
+    andi    t4, t4, 0x1F     # 获取目标寄存器号 rd
+    beq     t4, zero, trap_other    # 如果 rd 为 0，不进行补丁
+
+    li      t2, 2
+    beq     t4, t2, trap_other   # 如果 rd 是 sp (x2)，跳过处理
+
+    li      t2, 1
+    beq     t4, t2, update_offset
+    addi    t2, t4, -2
+    slli    t2, t2, 2
+    j       done_offset
+
+update_offset:
+    li      t2, 0
+
+done_offset:
+    add     t2, sp, t2       # t2 = trap frame 中目标寄存器的位置
+    mv      a7, t2           # 保存地址到 a7
+
+    # 重构 misaligned load 数据
+    csrr    t5, mtval        # 获取错误地址
+    lbu     t6, 0(t5)        # 加载字节0
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)        # 加载字节1
+    addi    t0, t5, 2
+    lbu     t2, 0(t0)        # 加载字节2
+    addi    t0, t5, 3
+    lbu     t3, 0(t0)        # 加载字节3
+
+    slli    t1, t1, 8
+    slli    t2, t2, 16
+    slli    t3, t3, 24
+    or      t6, t6, t1
+    or      t6, t6, t2
+    or      t6, t6, t3
+
+    # 写回修复后的数据到目标寄存器
+    sw      t6, 0(a7)
+
+    # 更新 mepc 跳过错误指令
+    csrr    t0, mepc
     addi    t0, t0, 4
-    csrw    mepc, t0            # Set mepc to the next instruction
-    
-    # Restore registers and return to interrupted instruction
+    csrw    mepc, t0
+
+    # 恢复寄存器
     j       restore_and_return
 
 handle_load_access_fault:
-    # Handle Load Access Fault (0x05)
-    la      a0, __e5            # Load the error message for Load Access Fault
+    # 处理 Load Access Fault 异常
+    la      a0, __e5         # 加载错误信息
     li      a7, PRINT_STR
     ecall
     j       terminate
 
 handle_misaligned_store:
-    # Handle Misaligned Store (0x06)
-    la      a0, __e6            # Load the error message for Misaligned Store
+    # 处理 Misaligned Store 异常
+    la      a0, __e6         # 加载错误信息
     li      a7, PRINT_STR
     ecall
     j       terminate
 
 restore_and_return:
-    # Restore registers and heap pointer
-    lw      ra, 0(sp)
-    lw      s0, 4(sp)
-    lw      s1, 8(sp)
-    lw      s2, 12(sp)
-    lw      s3, 16(sp)
-    lw      s4, 20(sp)
-    lw      s5, 24(sp)
-    lw      s6, 28(sp)
-    lw      s7, 32(sp)
-    lw      s8, 36(sp)
-    lw      s9, 40(sp)
-    lw      s10, 44(sp)
-    lw      s11, 48(sp)
-    lw      t0, 52(sp)
-    lw      t1, 56(sp)
-    lw      t2, 60(sp)
-    lw      t3, 64(sp)
-    lw      t4, 68(sp)
-    lw      t5, 72(sp)
-    lw      t6, 76(sp)
-    lw      a0, 80(sp)
-    lw      a1, 84(sp)
-    lw      a2, 88(sp)
-    lw      a3, 92(sp)
-    lw      a4, 96(sp)
-    lw      a5, 100(sp)
-    lw      a6, 104(sp)
-    lw      a7, 108(sp)
+    # 恢复寄存器
+    lw      ra,   0(sp)
+    lw      gp,   4(sp)
+    lw      tp,   8(sp)
+    lw      t0,  12(sp)
+    lw      t1,  16(sp)
+    lw      t2,  20(sp)
+    lw      s0,  24(sp)
+    lw      s1,  28(sp)
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    lw      s2,  64(sp)
+    lw      s3,  68(sp)
+    lw      s4,  72(sp)
+    lw      s5,  76(sp)
+    lw      s6,  80(sp)
+    lw      s7,  84(sp)
+    lw      s8,  88(sp)
+    lw      s9,  92(sp)
+    lw      s10, 96(sp)
+    lw      s11,100(sp)
+    lw      t3,104(sp)
+    lw      t4,108(sp)
+    lw      t5,112(sp)
+    lw      t6,116(sp)
+    addi    sp, sp, 120
 
-    # Restore heap pointer (if stored in mscratch earlier)
-    lw      t0, 112(sp)        # Load back heap pointer
-    csrw    mscratch, t0       # Restore heap pointer from mscratch
+    # 恢复用户 sp：将 mscratch 中的值换回 sp
+    csrrw   sp, mscratch, sp
 
-    addi    sp, sp, 128         # Restore stack pointer
-    
-    # Return to the interrupted instruction
     mret
 
-  	
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
