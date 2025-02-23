@@ -168,9 +168,9 @@ __mstart:
 
     csrr    t0, mcause           # Check cause of exception
     li      t1, 4
-    bne     t0, t1, trap_other    # If it's not a misaligned load, handle other exceptions
+    bne     t0, t1, check_store   # If it's not a misaligned load, check for misaligned store
 
-    # Misaligned Load Handler
+    # Misaligned Load Handling
     csrr    t0, mepc              # Get the faulting instruction address
     lw      t1, 0(t0)             # Load the instruction at that address
     andi    t2, t1, 0x7F          # Check if it's a load instruction (opcode == 0x03)
@@ -241,11 +241,30 @@ __mstart:
     csrrw   sp, mscratch, sp
     mret
 
+check_store:
+    li      t1, 6                  # Misaligned store check (mcause == 6)
+    bne     t0, t1, trap_other     # If not misaligned store, handle other exceptions
+    
+    # Misaligned Store Handling (similar to misaligned load but for stores)
+    csrr    t0, mepc              # Get the faulting instruction address
+    lw      t1, 0(t0)             # Load the instruction at that address
+    andi    t2, t1, 0x7F          # Check if it's a store instruction (opcode == 0x23)
+    li      t3, 0x23
+    bne     t2, t3, trap_other    # If not a store instruction, handle other exceptions
+
+    # If misaligned store, skip or terminate (depends on how you want to handle)
+    # Here we just print and terminate the program
+    la      a0, __e6               # Load message for misaligned store
+    li      a7, PRINT_STR
+    ecall
+
+    j       terminate
+
 trap_other:
-    # Handle other exceptions and terminate
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 # This code is taken from the default VRV system code. It prints out
