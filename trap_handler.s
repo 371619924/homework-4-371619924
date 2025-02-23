@@ -177,16 +177,16 @@ __mtrap:
 
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)    # 读取触发异常的指令
+    lw      t1, 0(t0)    # 读取异常指令
     andi    t2, t1, 0x7F
     li      t3, 0x03     # 确保是 load 指令
     bne     t2, t3, trap_other
 
-    # 获取 funct3 确定 load 类型
+    # 获取 funct3，确定 load 类型
     srai    t2, t1, 12
     andi    t2, t2, 0x7  
 
-    # 检查是否是 lw（0x2）、lb（0x0）、lh（0x1）、lbu（0x4）、lhu（0x5）
+    # lw (0x2), lb (0x0), lh (0x1), lbu (0x4), lhu (0x5)
     li      t3, 0x2  # lw
     beq     t2, t3, fix_lw
     li      t3, 0x0  # lb
@@ -201,15 +201,11 @@ handle_misaligned_load:
     j       trap_other  # 不是支持的 load 指令则终止
 
 fix_lw:
-    # 处理 misaligned lw
     csrr    t5, mtval
     lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)
+    lbu     t1, 1(t5)
+    lbu     t2, 2(t5)
+    lbu     t3, 3(t5)
 
     slli    t1, t1, 8
     slli    t2, t2, 16
@@ -223,7 +219,7 @@ fix_lb:
     csrr    t5, mtval
     lbu     t6, 0(t5)
     slli    t6, t6, 24
-    srai    t6, t6, 24  # 符号扩展
+    srai    t6, t6, 24  # **符号扩展**
     j       store_fixed_value
 
 fix_lbu:
@@ -234,27 +230,27 @@ fix_lbu:
 fix_lh:
     csrr    t5, mtval
     lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
+    lbu     t1, 1(t5)
     slli    t1, t1, 8
     or      t6, t6, t1
     slli    t6, t6, 16
-    srai    t6, t6, 16  # 符号扩展
+    srai    t6, t6, 16  # **符号扩展**
     j       store_fixed_value
 
 fix_lhu:
     csrr    t5, mtval
     lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
+    lbu     t1, 1(t5)
     slli    t1, t1, 8
     or      t6, t6, t1
     j       store_fixed_value
 
 store_fixed_value:
+    # **确定目标寄存器**
     srai    t4, t1, 7
     andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other
+    beq     t4, zero, trap_other  # 忽略 x0
+
     li      t2, 2
     beq     t4, t2, trap_other
     li      t2, 1
@@ -267,14 +263,19 @@ update_offset:
     li      t2, 0
 done_offset:
     add     t2, sp, t2
-    sw      t6, 0(t2)
+    sw      t6, 0(t2)  # **正确存入修复数据**
 
+    # **修正 mepc**
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
     j       restore_registers
 
 trap_other:
+    csrr    t0, mcause
+    li      t1, 6  # **misaligned store**
+    beq     t0, t1, terminate  # **直接终止**
+
     li      a7, PRINT_STR
     la      a0, __m_exc
     ecall
