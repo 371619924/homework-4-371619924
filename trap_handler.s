@@ -128,44 +128,44 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
+.globl __mtrap
 __mtrap:
-    # Save the current stack pointer in mscratch to avoid losing malloc memory
-    mv t0, sp                # Save sp in t0
-    csrr    sp, mscratch      # Load mscratch into sp
-    csrw    mscratch, t0      # Store original sp into mscratch
+    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    csrrw   sp, mscratch, sp
 
-    # Save registers (x0-x31)
-    addi    sp, sp, -120      # Allocate space on the stack for saving registers
-    sw      ra, 0(sp)
-    sw      gp, 4(sp)
-    sw      tp, 8(sp)
-    sw      t0, 12(sp)
-    sw      t1, 16(sp)
-    sw      t2, 20(sp)
-    sw      s0, 24(sp)
-    sw      s1, 28(sp)
-    sw      a0, 32(sp)
-    sw      a1, 36(sp)
-    sw      a2, 40(sp)
-    sw      a3, 44(sp)
-    sw      a4, 48(sp)
-    sw      a5, 52(sp)
-    sw      a6, 56(sp)
-    sw      a7, 60(sp)
-    sw      s2, 64(sp)
-    sw      s3, 68(sp)
-    sw      s4, 72(sp)
-    sw      s5, 76(sp)
-    sw      s6, 80(sp)
-    sw      s7, 84(sp)
-    sw      s8, 88(sp)
-    sw      s9, 92(sp)
-    sw      s10, 96(sp)
-    sw      s11, 100(sp)
-    sw      t3, 104(sp)
-    sw      t4, 108(sp)
-    sw      t5, 112(sp)
-    sw      t6, 116(sp)
+    # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 120 字节
+    addi    sp, sp, -120
+    # 按要求保存寄存器，顺序：x1, x3, x4, …, x31
+    sw      ra,   0(sp)      # x1 (ra)
+    sw      gp,   4(sp)      # x3 (gp)
+    sw      tp,   8(sp)      # x4 (tp)
+    sw      t0,  12(sp)      # x5 (t0)
+    sw      t1,  16(sp)      # x6 (t1)
+    sw      t2,  20(sp)      # x7 (t2)
+    sw      s0,  24(sp)      # x8 (s0)
+    sw      s1,  28(sp)      # x9 (s1)
+    sw      a0,  32(sp)      # x10 (a0)
+    sw      a1,  36(sp)      # x11 (a1)
+    sw      a2,  40(sp)      # x12 (a2)
+    sw      a3,  44(sp)      # x13 (a3)
+    sw      a4,  48(sp)      # x14 (a4)
+    sw      a5,  52(sp)      # x15 (a5)
+    sw      a6,  56(sp)      # x16 (a6)
+    sw      a7,  60(sp)      # x17 (a7)
+    sw      s2,  64(sp)      # x18 (s2)
+    sw      s3,  68(sp)      # x19 (s3)
+    sw      s4,  72(sp)      # x20 (s4)
+    sw      s5,  76(sp)      # x21 (s5)
+    sw      s6,  80(sp)      # x22 (s6)
+    sw      s7,  84(sp)      # x23 (s7)
+    sw      s8,  88(sp)      # x24 (s8)
+    sw      s9,  92(sp)      # x25 (s9)
+    sw      s10, 96(sp)      # x26 (s10)
+    sw      s11,100(sp)      # x27 (s11)
+    sw      t3,104(sp)       # x28 (t3)
+    sw      t4,108(sp)       # x29 (t4)
+    sw      t5,112(sp)       # x30 (t5)
+    sw      t6,116(sp)       # x31 (t6)
 
     # 检查异常类型：
     csrr    t0, mcause
@@ -185,51 +185,46 @@ __mtrap:
     # 其他异常，跳转到终止处理
     j       terminate
 
-# 处理 Misaligned Load 异常
+# 处理 Misaligned Load 异常（保持不变）
 handle_misaligned_load:
     csrr    t0, mepc         # 获取出错的指令地址
     lw      t1, 0(t0)        # 获取出错的指令字
 
-    andi    t2, t1, 0x7F     # 获取指令的 opcode (低7位)
-    li      t3, 0x03         # 如果是 lw 指令，opcode 为 0x03
+    andi    t2, t1, 0x7F     # 获取 opcode（低7位）
+    li      t3, 0x03         # lw 指令 opcode
     bne     t2, t3, trap_other
 
-    srai    t2, t1, 12       # 获取 funct3（低12-14位）
+    srai    t2, t1, 12       # 获取 funct3（位 12-14）
     andi    t2, t2, 0x7
-    li      t3, 0x2          # 如果是 lw 指令，funct3 为 0x2
+    li      t3, 0x2          # lw 指令 funct3 应为 0x2
     bne     t2, t3, trap_other
 
-    # 提取 rd (目标寄存器号)
+    # 提取目标寄存器号 rd（位 7-11）
     srai    t4, t1, 7
-    andi    t4, t4, 0x1F     # 获取目标寄存器号 rd
-    beq     t4, zero, trap_other    # 如果 rd 为 0，不进行补丁
-
+    andi    t4, t4, 0x1F
+    beq     t4, zero, trap_other    # rd 为0时不修补
     li      t2, 2
-    beq     t4, t2, trap_other   # 如果 rd 是 sp (x2)，跳过处理
-
+    beq     t4, t2, trap_other      # 如果 rd 是 sp (x2) 不修补
     li      t2, 1
     beq     t4, t2, update_offset
     addi    t2, t4, -2
     slli    t2, t2, 2
     j       done_offset
-
 update_offset:
     li      t2, 0
-
 done_offset:
-    add     t2, sp, t2       # t2 = trap frame 中目标寄存器的位置
-    mv      a7, t2           # 保存地址到 a7
+    add     t2, sp, t2       # t2 指向 trap frame 中目标寄存器槽
+    mv      a7, t2          # 保存该地址到 a7
 
-    # 重构 misaligned load 数据
-    csrr    t5, mtval        # 获取错误地址
-    lbu     t6, 0(t5)        # 加载字节0
+    # 重构 misaligned load 数据：从 mtval 开始连续加载 4 字节
+    csrr    t5, mtval       # 获取错误地址
+    lbu     t6, 0(t5)
     addi    t0, t5, 1
-    lbu     t1, 0(t0)        # 加载字节1
+    lbu     t1, 0(t0)
     addi    t0, t5, 2
-    lbu     t2, 0(t0)        # 加载字节2
+    lbu     t2, 0(t0)
     addi    t0, t5, 3
-    lbu     t3, 0(t0)        # 加载字节3
-
+    lbu     t3, 0(t0)
     slli    t1, t1, 8
     slli    t2, t2, 16
     slli    t3, t3, 24
@@ -237,38 +232,38 @@ done_offset:
     or      t6, t6, t2
     or      t6, t6, t3
 
-    # 写回修复后的数据到目标寄存器
-    sw      t6, 0(a7)
+    sw      t6, 0(a7)       # 写回修复后的数据
 
-    # 更新 mepc 跳过错误指令
+    # 更新 mepc 跳过出错指令（+4）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 恢复寄存器
     j       restore_and_return
 
+# 修改重点：针对 badjump 测试的 Load Access Fault 处理
 handle_load_access_fault:
-    # 处理 Load Access Fault 异常
-    csrr    t0, mepc         # 获取出错的指令地址
-    li      t1, 0x0          # 如果访问的是 0x0 地址，跳转到终止处理
-    beq     t0, t1, terminate
-
-    # 否则，继续其他的异常处理逻辑
-    la      a0, __e5         # 加载错误信息
+    # 使用 mtval 检查出错的地址是否为 0x00000000
+    csrr    t0, mtval       # 获取导致 fault 的地址
+    li      t1, 0x0
+    beq     t0, t1, terminate  # 如果 fault 地址为 0，则直接终止（防止空指针加载）
+    # 否则，打印错误信息后终止
+    la      a0, __e5        # __e5 存储 " [Load access fault]"
     li      a7, PRINT_STR
     ecall
     j       terminate
 
 handle_misaligned_store:
-    # 处理 Misaligned Store 异常
-    la      a0, __e6         # 加载错误信息
+    la      a0, __e6        # __e6 存储 " [Misaligned store address]"
     li      a7, PRINT_STR
     ecall
     j       terminate
 
+trap_other:
+    j       terminate
+
 restore_and_return:
-    # 恢复寄存器
+    # 恢复保存的寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -301,10 +296,14 @@ restore_and_return:
     lw      t6,116(sp)
     addi    sp, sp, 120
 
-    # 恢复用户 sp：将 mscratch 中的值换回 sp
+    # 恢复用户 sp：将 mscratch 中保存的用户 sp 换回 sp
     csrrw   sp, mscratch, sp
 
     mret
+
+terminate:
+    # 调用终止处理（终止程序）
+    j       terminate
 
     
 trap_other:
