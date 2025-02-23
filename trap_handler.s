@@ -131,7 +131,6 @@ __mstart:
 	
   	
     
-.globl __mtrap
 __mtrap:
     csrrw   sp, mscratch, sp         # Swap sp and mscratch (enter kernel stack)
     addi    sp, sp, -120             # Allocate 120 bytes for trap frame
