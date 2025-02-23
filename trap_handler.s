@@ -130,7 +130,7 @@ __mstart:
 
 	
   	
-__mtrap:
+ __mtrap:
     # Save user registers
     csrrw   sp, mscratch, sp            # Swap sp with mscratch to use kernel stack
     addi    sp, sp, -120                # Allocate space for 30 registers
@@ -165,14 +165,14 @@ __mtrap:
     sw      t5, 112(sp)
     sw      t6, 116(sp)
 
-    # Check for misaligned load or store
-    csrr    t0, mcause                 # Get cause of the exception
+    # Check if the exception is a misaligned load (mcause == 4) or misaligned store (mcause == 6)
+    csrr    t0, mcause                 # Get the cause of the exception
     li      t1, 4                       # Misaligned load exception code
     li      t2, 6                       # Misaligned store exception code
     beq     t0, t1, misaligned_load    # If misaligned load, jump to misaligned load handler
     beq     t0, t2, misaligned_store   # If misaligned store, jump to misaligned store handler
 
-    # Handle other exceptions (e.g., load/store access fault)
+    # For other exceptions (like Load Access Fault, etc.), jump to the default terminate routine
     j       trap_other
 
 # Misaligned Load Handler
@@ -247,6 +247,7 @@ misaligned_load:
     lw      t4, 108(sp)
     lw      t5, 112(sp)
     lw      t6, 116(sp)
+    addi    sp, sp, 120
 
     # Restore user sp
     csrrw   sp, mscratch, sp
@@ -312,6 +313,7 @@ misaligned_store:
     lw      t4, 108(sp)
     lw      t5, 112(sp)
     lw      t6, 116(sp)
+    addi    sp, sp, 120
 
     # Restore user sp
     csrrw   sp, mscratch, sp
@@ -323,8 +325,6 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
-
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
