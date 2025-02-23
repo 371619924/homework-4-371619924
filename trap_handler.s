@@ -165,12 +165,18 @@ __mtrap:
     sw      t5, 112(sp)
     sw      t6, 116(sp)
 
-    # Check for misaligned load
+    # Check for misaligned load or store
     csrr    t0, mcause                 # Get cause of the exception
     li      t1, 4                       # Misaligned load exception code
-    bne     t0, t1, trap_other         # If not a misaligned load, handle other exceptions
+    li      t2, 6                       # Misaligned store exception code
+    beq     t0, t1, misaligned_load    # If misaligned load, jump to misaligned load handler
+    beq     t0, t2, misaligned_store   # If misaligned store, jump to misaligned store handler
 
-    # Handle misaligned load address
+    # Handle other exceptions (e.g., load/store access fault)
+    j       trap_other
+
+# Misaligned Load Handler
+misaligned_load:
     csrr    t0, mepc                   # Load the faulting instruction address
     lw      t1, 0(t0)                  # Fetch the instruction
     andi    t2, t1, 0x7F               # Extract opcode (lower 7 bits)
@@ -247,6 +253,72 @@ __mtrap:
 
     mret
 
+# Misaligned Store Handler
+misaligned_store:
+    csrr    t0, mepc                   # Load the faulting instruction address
+    lw      t1, 0(t0)                  # Fetch the instruction
+    andi    t2, t1, 0x7F               # Extract opcode (lower 7 bits)
+    li      t3, 0x23                   # Opcode for store instructions (sw)
+    bne     t2, t3, trap_other         # If it's not a store, handle other exceptions
+
+    # Handle misaligned store
+    csrr    t5, mtval                  # Get the misaligned store address (mtval)
+    lbu     t6, 0(t5)                  # Load byte 0
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)                  # Load byte 1
+    addi    t0, t5, 2
+    lbu     t2, 0(t0)                  # Load byte 2
+    addi    t0, t5, 3
+    lbu     t3, 0(t0)                  # Load byte 3
+
+    slli    t1, t1, 8                  # Shift byte 1 into place
+    slli    t2, t2, 16                 # Shift byte 2 into place
+    slli    t3, t3, 24                 # Shift byte 3 into place
+    or      t6, t6, t1                 # Combine bytes into a 32-bit word
+    or      t6, t6, t2
+    or      t6, t6, t3
+
+    # Write the reconstructed data to the store address
+    sw      t6, 0(t5)
+
+    # Restore the saved registers
+    lw      ra,   0(sp)
+    lw      gp,   4(sp)
+    lw      tp,   8(sp)
+    lw      t0,  12(sp)
+    lw      t1,  16(sp)
+    lw      t2,  20(sp)
+    lw      s0,  24(sp)
+    lw      s1,  28(sp)
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    lw      s2,  64(sp)
+    lw      s3,  68(sp)
+    lw      s4,  72(sp)
+    lw      s5,  76(sp)
+    lw      s6,  80(sp)
+    lw      s7,  84(sp)
+    lw      s8,  88(sp)
+    lw      s9,  92(sp)
+    lw      s10, 96(sp)
+    lw      s11,100(sp)
+    lw      t3, 104(sp)
+    lw      t4, 108(sp)
+    lw      t5, 112(sp)
+    lw      t6, 116(sp)
+
+    # Restore user sp
+    csrrw   sp, mscratch, sp
+
+    mret
+
+# Handle other exceptions and interrupts
 trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
