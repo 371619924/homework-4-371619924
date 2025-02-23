@@ -177,7 +177,6 @@ __mtrap:
     j       trap_other
 
 handle_misaligned_lw:
-    # 处理 misaligned lw
     csrr    t0, mepc
     lw      t1, 0(t0)
     andi    t2, t1, 0x7F
@@ -185,43 +184,33 @@ handle_misaligned_lw:
     bne     t2, t3, trap_other
     srai    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 2
-    bne     t2, t3, trap_other
 
-    # 计算 rd 寄存器编号
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other
+    # 处理 `lw`
     li      t3, 2
-    beq     t4, t3, trap_other
-
-    # 计算寄存器存储位置
+    beq     t2, t3, handle_lw
+    # 处理 `lh`
     li      t3, 1
-    beq     t4, t3, set_offset_zero
-    addi    t3, t4, -2
-    slli    t3, t3, 2
-    j       set_offset_done
-set_offset_zero:
+    beq     t2, t3, handle_lh
+    # 处理 `lb`
     li      t3, 0
-set_offset_done:
-    add     t3, sp, t3
-    mv      a7, t3
+    beq     t2, t3, handle_lb
+    j       trap_other
 
-    # 修复非对齐加载
+handle_lw:
     csrr    t5, mtval
     andi    t2, t5, 3
     sub     t5, t5, t2
     lw      t0, 0(t5)
     lw      t1, 4(t5)
 
-    # 组合正确的值
-    beq     t2, zero, lw_case0
+    # 组合数据
     li      t3, 1
     beq     t2, t3, lw_case1
     li      t3, 2
     beq     t2, t3, lw_case2
     li      t3, 3
     beq     t2, t3, lw_case3
+    j       lw_case0
 lw_case0:
     mv      t6, t0
     j       store_lw
@@ -240,96 +229,41 @@ lw_case3:
     slli    t3, t1, 8
     or      t6, t2, t3
 store_lw:
-    sw      t6, 0(a7)
+    sw      t6, 32(sp)  # 存入 `a0`
+    j       advance_pc
 
-    # 调整 mepc
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-    j       restore_registers
-
-handle_misaligned_sw:
-    # 处理 misaligned sw
-    csrr    t0, mepc
-    lw      t1, 0(t0)
-    andi    t2, t1, 0x7F
-    li      t3, 0x23
-    bne     t2, t3, trap_other
-
-    srai    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 2
-    bne     t2, t3, trap_other
-
-    # 计算需要修正的地址
+handle_lh:
     csrr    t5, mtval
-    andi    t2, t5, 3
+    andi    t2, t5, 1
     sub     t5, t5, t2
+    lh      t6, 0(t5)
+    sw      t6, 32(sp)
+    j       advance_pc
 
-    # 读取存储值
-    lw      t6, 0(sp)
+handle_lb:
+    csrr    t5, mtval
+    lb      t6, 0(t5)
+    sw      t6, 32(sp)
+    j       advance_pc
 
-    # 修复并存储
-    beq     t2, zero, sw_case0
-    li      t3, 1
-    beq     t2, t3, sw_case1
-    li      t3, 2
-    beq     t2, t3, sw_case2
-    li      t3, 3
-    beq     t2, t3, sw_case3
-sw_case0:
-    sw      t6, 0(t5)
-    j       store_done
-sw_case1:
-    srli    t3, t6, 8
-    sb      t3, 1(t5)
-    srli    t3, t6, 16
-    sb      t3, 2(t5)
-    srli    t3, t6, 24
-    sb      t3, 3(t5)
-    j       store_done
-sw_case2:
-    srli    t3, t6, 16
-    sh      t3, 2(t5)
-    j       store_done
-sw_case3:
-    sb      t6, 3(t5)
-    j       store_done
-
-store_done:
+advance_pc:
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
     j       restore_registers
 
 trap_other:
+    csrr    t0, mtval
+    beqz    t0, terminate  # 解决 `badjump.s` 的问题
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
 
 restore_registers:
-    lw      ra,   0(sp)
-    lw      gp,   4(sp)
-    lw      tp,   8(sp)
-    lw      t0,  12(sp)
-    lw      t1,  16(sp)
-    lw      t2,  20(sp)
-    lw      s0,  24(sp)
-    lw      s1,  28(sp)
-    lw      a0,  32(sp)
-    lw      a1,  36(sp)
-    lw      a2,  40(sp)
-    lw      a3,  44(sp)
-    lw      a4,  48(sp)
-    lw      a5,  52(sp)
-    lw      a6,  56(sp)
-    lw      a7,  60(sp)
+    lw      a0, 32(sp)  # 恢复 `a0`
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
-
-
-
 
 
 # This code is taken from the default VRV system code. It prints out
