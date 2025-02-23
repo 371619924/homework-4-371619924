@@ -131,12 +131,12 @@ __mstart:
 	
   	
     
-# trap handler 处理
+### Trap handler
 __mtrap:
-    csrrw   sp, mscratch, sp        # 交换 sp 和 mscratch
-    addi    sp, sp, -120            # 分配 trap frame 空间
+    csrrw   sp, mscratch, sp        # Swap sp and mscratch
+    addi    sp, sp, -120            # Allocate space for registers
 
-    # 保存所有寄存器
+    # Save all registers
     sw      ra,   0(sp)
     sw      gp,   4(sp)
     sw      tp,   8(sp)
@@ -168,78 +168,62 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
-    # 获取异常类型
-    csrr    t0, mcause              # 获取异常原因
-    li      t1, 4                    # misaligned load 异常为 4
-    li      t2, 6                    # misaligned store 异常为 6
-    bne     t0, t1, check_store     # 如果不是 misaligned load，跳到检查 misaligned store
-    j       handle_misaligned_load  # 处理 misaligned load 异常
+    # Check exception cause
+    csrr    t0, mcause
+    li      t1, 4                   # Misaligned load (mcause=4)
+    bne     t0, t1, trap_other      # Handle only misaligned load
 
-check_store:
-    bne     t0, t2, trap_other      # 如果不是 misaligned store，跳到其他异常处理
-
-handle_misaligned_load:
-    csrr    t0, mepc                # 获取触发异常的指令地址
-    lw      t1, 0(t0)               # 获取触发异常的指令字
-
-    andi    t2, t1, 0x7F            # 检查指令是否为 load 操作
-    li      t3, 0x03
-    bne     t2, t3, trap_other      # 如果不是 load 操作，跳转到其他异常处理
-
-    srai    t2, t1, 12              # 检查 funct3 是否为 lw 指令
+    # Check if the instruction is lw
+    csrr    t0, mepc
+    lw      t1, 0(t0)               # Fetch the instruction
+    andi    t2, t1, 0x7F            # Extract opcode
+    li      t3, 0x03                # lw opcode
+    bne     t2, t3, trap_other      # Not lw? Jump to terminate
+    srli    t2, t1, 12              # Extract funct3
     andi    t2, t2, 0x7
-    li      t3, 0x2
-    bne     t2, t3, trap_other      # 如果不是 lw 指令，跳转到其他异常处理
+    li      t3, 0x2                 # lw funct3=0x2
+    bne     t2, t3, trap_other      # Not lw? Jump to terminate
 
-    srai    t4, t1, 7               # 提取目标寄存器号 rd（位 11:7）
-    andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other    # 如果 rd 为 0，不做补丁
-    li      t2, 2
-    beq     t4, t2, trap_other      # 如果 rd 为 sp (x2)，不处理
+    # Extract rd register number
+    srli    t4, t1, 7
+    andi    t4, t4, 0x1F            # rd = (inst >> 7) & 0x1F
+    beqz    t4, trap_other          # rd=x0? Skip
     li      t2, 1
-    beq     t4, t2, update_offset   # 如果 rd 为 a1 (x1)，跳过
-    addi    t2, t4, -2
-    slli    t2, t2, 2
-    j       done_offset
+    beq     t4, t2, trap_other      # rd=x1(ra)? Skip
+    li      t2, 2
+    beq     t4, t2, trap_other      # rd=x2(sp)? Skip
 
-update_offset:
-    li      t2, 0
+    # Calculate offset in stack frame for rd
+    li      t2, 32                  # Base offset for a0 (x10)
+    addi    t3, t4, -10             # rd - 10
+    slli    t3, t3, 2               # Multiply by 4
+    add     t2, t2, t3              # Offset = 32 + (rd -10)*4
+    add     t2, sp, t2              # Address to store the result
 
-done_offset:
-    add     t2, sp, t2              # t2 指向 trap frame 中目标寄存器槽
-    mv      a7, t2                  # 保存该地址到 a7（后续用于写入补丁数据）
+    # Load misaligned data
+    csrr    t5, mtval               # Faulty address
+    lbu     t6, 0(t5)               # Byte 0
+    lbu     t0, 1(t5)               # Byte 1
+    lbu     t1, 2(t5)               # Byte 2
+    lbu     t3, 3(t5)               # Byte 3
 
-    # 读取 misaligned load 数据
-    csrr    t5, mtval               # 获取 misaligned load 地址
-    bnez    t5, handle_valid_addr   # 如果 mtval 非零，继续处理
-    j       trap_other              # 如果 mtval 为零，跳转到其他处理
-
-handle_valid_addr:
-    # 读取四个字节数据
-    lbu     t6, 0(t5)               # 加载字节0
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)               # 加载字节1
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)               # 加载字节2
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)               # 加载字节3
-
-    slli    t1, t1, 8
-    slli    t2, t2, 16
+    # Combine bytes into 32-bit value (little-endian)
+    slli    t0, t0, 8
+    slli    t1, t1, 16
     slli    t3, t3, 24
+    or      t6, t6, t0
     or      t6, t6, t1
-    or      t6, t6, t2
     or      t6, t6, t3
 
-    # 将修复后的数据写入目标寄存器
-    sw      t6, 0(a7)
+    # Store result to the correct register slot
+    sw      t6, 0(t2)
 
-    # 更新 mepc（跳过出错指令 4 字节）
+    # Skip the faulting instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 恢复寄存器并返回
+    # Restore registers
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -271,43 +255,14 @@ handle_valid_addr:
     lw      t5,112(sp)
     lw      t6,116(sp)
     addi    sp, sp, 120
-
     csrrw   sp, mscratch, sp
-
     mret
 
 trap_other:
+    # Jump to terminate for other exceptions
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
-    la      a0, __m_exc            # 加载异常头部消息
-    li      a7, PRINT_STR          # 打印字符串 syscall
-    ecall
-
-    la      a0, __m_mcause
-    ecall
-    csrr    a0, mcause
-    li      a7, PRINT_HEX
-    ecall
-
-    la      a0, __m_mepc
-    li      a7, PRINT_STR
-    ecall
-    csrr    a0, mepc
-    li      a7, PRINT_HEX
-    ecall
-
-    la      a0, __m_mtval
-    li      a7, PRINT_STR
-    ecall
-    csrr    a0, mtval
-    li      a7, PRINT_HEX
-    ecall
-
-    li      a0, -1
-    li      a7, EXIT
-    ecall
-
-
+    j       terminate
 
 
 
