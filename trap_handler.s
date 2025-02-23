@@ -129,11 +129,11 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 __mtrap:
-    # Swap stack pointer with mscratch
+    # Save the current stack pointer in mscratch to avoid losing malloc memory
     mv t0, sp                # Save sp in t0
     csrr    sp, mscratch      # Load mscratch into sp
     csrw    mscratch, t0      # Store original sp into mscratch
-    
+
     # Save registers (x0-x31)
     addi    sp, sp, -128      # Allocate space on the stack for saving registers
     sw      ra, 0(sp)
@@ -164,7 +164,13 @@ __mtrap:
     sw      a5, 100(sp)
     sw      a6, 104(sp)
     sw      a7, 108(sp)
-    
+
+    # Preserve malloc memory, ensure that heap space is saved
+    # We are assuming the heap pointer is stored somewhere, such as mscratch or another register.
+    # In this case, we save the current heap pointer location
+    csrr    t0, mscratch       # Assuming heap pointer is in mscratch
+    sw      t0, 112(sp)        # Save the heap pointer into the stack
+
     # Check the exception type
     csrr    t0, mcause          # Load the cause into t0
     li      t1, 0x04            # Misaligned load word cause
@@ -174,7 +180,7 @@ __mtrap:
     beq     t0, t1, handle_misaligned_load    # Misaligned load
     beq     t0, t2, handle_load_access_fault  # Load access fault
     beq     t0, t3, handle_misaligned_store   # Misaligned store
-    
+
     # If it's not any of these, jump to terminate function
     j       terminate
 
@@ -222,7 +228,7 @@ handle_misaligned_store:
     j       terminate
 
 restore_and_return:
-    # Restore registers
+    # Restore registers and heap pointer
     lw      ra, 0(sp)
     lw      s0, 4(sp)
     lw      s1, 8(sp)
@@ -251,12 +257,16 @@ restore_and_return:
     lw      a5, 100(sp)
     lw      a6, 104(sp)
     lw      a7, 108(sp)
+
+    # Restore heap pointer (if stored in mscratch earlier)
+    lw      t0, 112(sp)        # Load back heap pointer
+    csrw    mscratch, t0       # Restore heap pointer from mscratch
+
     addi    sp, sp, 128         # Restore stack pointer
     
     # Return to the interrupted instruction
     mret
 
-	
   	
 
 # This code is taken from the default VRV system code. It prints out
