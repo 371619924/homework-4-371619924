@@ -133,33 +133,34 @@ __mstart:
     
 .globl __mtrap
 __mtrap:
-    csrrw   sp, mscratch, sp         # 使用内核栈
-    addi    sp, sp, -120             # 分配陷阱帧
-    # 保存所有寄存器（保持原有逻辑）
-    sw      ra, 0(sp)
-    sw      gp, 4(sp)
-    sw      tp, 8(sp)
-    sw      t0, 12(sp)
-    sw      t1, 16(sp)
-    sw      t2, 20(sp)
-    sw      s0, 24(sp)
-    sw      s1, 28(sp)
-    sw      a0, 32(sp)
-    sw      a1, 36(sp)
-    sw      a2, 40(sp)
-    sw      a3, 44(sp)
-    sw      a4, 48(sp)
-    sw      a5, 52(sp)
-    sw      a6, 56(sp)
-    sw      a7, 60(sp)
-    sw      s2, 64(sp)
-    sw      s3, 68(sp)
-    sw      s4, 72(sp)
-    sw      s5, 76(sp)
-    sw      s6, 80(sp)
-    sw      s7, 84(sp)
-    sw      s8, 88(sp)
-    sw      s9, 92(sp)
+    csrrw   sp, mscratch, sp         # 进入内核栈
+    addi    sp, sp, -120             # 预留栈空间
+
+    # 保存所有寄存器
+    sw      ra,   0(sp)
+    sw      gp,   4(sp)
+    sw      tp,   8(sp)
+    sw      t0,  12(sp)
+    sw      t1,  16(sp)
+    sw      t2,  20(sp)
+    sw      s0,  24(sp)
+    sw      s1,  28(sp)
+    sw      a0,  32(sp)
+    sw      a1,  36(sp)
+    sw      a2,  40(sp)
+    sw      a3,  44(sp)
+    sw      a4,  48(sp)
+    sw      a5,  52(sp)
+    sw      a6,  56(sp)
+    sw      a7,  60(sp)
+    sw      s2,  64(sp)
+    sw      s3,  68(sp)
+    sw      s4,  72(sp)
+    sw      s5,  76(sp)
+    sw      s6,  80(sp)
+    sw      s7,  84(sp)
+    sw      s8,  88(sp)
+    sw      s9,  92(sp)
     sw      s10, 96(sp)
     sw      s11,100(sp)
     sw      t3,104(sp)
@@ -167,120 +168,178 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
+    # 读取 mcause
     csrr    t0, mcause
     li      t1, 4
-    beq     t0, t1, handle_load_misalign
+    beq     t0, t1, handle_misaligned_lw
     li      t1, 6
-    beq     t0, t1, handle_store_misalign
+    beq     t0, t1, handle_misaligned_sw
     j       trap_other
 
-# 处理加载未对齐（原有逻辑，移除对sp的检查）
-handle_load_misalign:
+handle_misaligned_lw:
+    # 处理 misaligned lw
     csrr    t0, mepc
     lw      t1, 0(t0)
     andi    t2, t1, 0x7F
     li      t3, 0x03
     bne     t2, t3, trap_other
-    srli    t2, t1, 12
+    srai    t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 2
     bne     t2, t3, trap_other
 
+    # 计算 rd 寄存器编号
     srai    t4, t1, 7
     andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other      # 跳过x0
+    beq     t4, zero, trap_other
+    li      t3, 2
+    beq     t4, t3, trap_other
 
-    # ... 原有数据重组逻辑 ...
+    # 计算寄存器存储位置
+    li      t3, 1
+    beq     t4, t3, set_offset_zero
+    addi    t3, t4, -2
+    slli    t3, t3, 2
+    j       set_offset_done
+set_offset_zero:
+    li      t3, 0
+set_offset_done:
+    add     t3, sp, t3
+    mv      a7, t3
+
+    # 修复非对齐加载
+    csrr    t5, mtval
+    andi    t2, t5, 3
+    sub     t5, t5, t2
+    lw      t0, 0(t5)
+    lw      t1, 4(t5)
+
+    # 组合正确的值
+    beq     t2, zero, lw_case0
+    li      t3, 1
+    beq     t2, t3, lw_case1
+    li      t3, 2
+    beq     t2, lw_case2
+    li      t3, 3
+    beq     t2, lw_case3
+lw_case0:
+    mv      t6, t0
+    j       store_lw
+lw_case1:
+    srli    t2, t0, 8
+    slli    t3, t1, 24
+    or      t6, t2, t3
+    j       store_lw
+lw_case2:
+    srli    t2, t0, 16
+    slli    t3, t1, 16
+    or      t6, t2, t3
+    j       store_lw
+lw_case3:
+    srli    t2, t0, 24
+    slli    t3, t1, 8
+    or      t6, t2, t3
+store_lw:
+    sw      t6, 0(a7)
+
+    # 调整 mepc
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
     j       restore_registers
 
-# 处理存储未对齐（新增完整case标签）
-handle_store_misalign:
+handle_misaligned_sw:
+    # 处理 misaligned sw
     csrr    t0, mepc
     lw      t1, 0(t0)
     andi    t2, t1, 0x7F
-    li      t3, 0x23                  # sw的opcode
+    li      t3, 0x23
     bne     t2, t3, trap_other
-    srli    t2, t1, 12
+
+    srai    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 0x2                   # sw的funct3
+    li      t3, 2
     bne     t2, t3, trap_other
 
-    # 提取rs2的值（从陷阱帧中获取）
-    srli    t4, t1, 20                # rs2字段位置
-    andi    t4, t4, 0x1F              # rs2寄存器号
-    slli    t4, t4, 2                 # 转换为偏移（每个寄存器占4字节）
-    add     t4, sp, t4                # 陷阱帧中的寄存器位置
-    lw      t5, 0(t4)                 # t5 = 要存储的值
+    # 计算需要修正的地址
+    csrr    t5, mtval
+    andi    t2, t5, 3
+    sub     t5, t5, t2
 
-    csrr    t0, mtval                 # 故障地址
-    andi    t1, t0, 0x3               # 计算偏移量（0-3）
-    andi    t2, t0, -4                # 对齐后的地址
+    # 读取存储值
+    li      t3, 1
+    beq     t4, t3, set_offset_zero_sw
+    addi    t3, t4, -2
+    slli    t3, t3, 2
+    j       set_offset_done_sw
+set_offset_zero_sw:
+    li      t3, 0
+set_offset_done_sw:
+    add     t3, sp, t3
+    lw      t6, 0(t3)
 
-    # 读取原始内存内容
-    lw      t3, 0(t2)                 # 低地址对齐字
-    lw      t4, 4(t2)                 # 高地址对齐字
+    # 修复并存储
+    beq     t2, zero, sw_case0
+    li      t3, 1
+    beq     t2, t3, sw_case1
+    li      t3, 2
+    beq     t2, sw_case2
+    li      t3, 3
+    beq     t2, sw_case3
+sw_case0:
+    sw      t6, 0(t5)
+    j       store_done
+sw_case1:
+    srli    t3, t6, 8
+    sb      t3, 1(t5)
+    srli    t3, t6, 16
+    sb      t3, 2(t5)
+    srli    t3, t6, 24
+    sb      t3, 3(t5)
+    j       store_done
+sw_case2:
+    srli    t3, t6, 16
+    sh      t3, 2(t5)
+    j       store_done
+sw_case3:
+    sb      t6, 3(t5)
+    j       store_done
 
-    # 根据偏移量合并数据
-    beqz    t1, sw_case0              # 偏移0
-    li      a7, 1
-    beq     t1, a7, sw_case1          # 偏移1
-    li      a7, 2
-    beq     t1, a7, sw_case2          # 偏移2
-    li      a7, 3
-    beq     t1, a7, sw_case3          # 偏移3
-
-sw_case0:                             # 对齐，无需处理
-    sw      t5, 0(t2)
-    j       sw_done
-
-sw_case1:                             # 偏移1：拆分到两个字
-    slli    t6, t5, 8                 # 高24位
-    srli    t5, t5, 24                # 低8位
-    or      t3, t3, t6                # 合并到低字
-    slli    t5, t5, 24                # 对齐到高字
-    or      t4, t4, t5
-    j       sw_write
-
-sw_case2:                             # 偏移2：拆分到两个字
-    slli    t6, t5, 16                # 高16位
-    srli    t5, t5, 16                # 低16位
-    or      t3, t3, t6
-    slli    t5, t5, 16
-    or      t4, t4, t5
-    j       sw_write
-
-sw_case3:                             # 偏移3：拆分到两个字
-    slli    t6, t5, 24                # 高8位
-    srli    t5, t5, 8                 # 低24位
-    or      t3, t3, t6
-    slli    t5, t5, 8
-    or      t4, t4, t5
-
-sw_write:
-    sw      t3, 0(t2)                 # 写入低字
-    sw      t4, 4(t2)                 # 写入高字
-
-sw_done:
+store_done:
     csrr    t0, mepc
-    addi    t0, t0, 4                 # 跳过当前指令
+    addi    t0, t0, 4
     csrw    mepc, t0
-
-restore_registers:
-    # 恢复所有寄存器（原有逻辑）
-    lw      ra, 0(sp)
-    lw      gp, 4(sp)
-    # ... 其他寄存器的恢复 ...
-    csrrw   sp, mscratch, sp
-    mret
+    j       restore_registers
 
 trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
 
+restore_registers:
+    lw      ra,   0(sp)
+    lw      gp,   4(sp)
+    lw      tp,   8(sp)
+    lw      t0,  12(sp)
+    lw      t1,  16(sp)
+    lw      t2,  20(sp)
+    lw      s0,  24(sp)
+    lw      s1,  28(sp)
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
+    mret
 
 
-    
+
+
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
