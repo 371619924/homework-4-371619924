@@ -174,6 +174,12 @@ __mtrap:
     li      t1, 6                   # misaligned store 异常为 6
     beq     t0, t1, handle_misaligned_store # 处理 misaligned store
 
+    li      t1, 5                   # store access fault 异常为 5
+    beq     t0, t1, handle_store_access_fault # 处理 store access fault
+
+    li      t1, 7                   # load access fault 异常为 7
+    beq     t0, t1, handle_load_access_fault # 处理 load access fault
+
 trap_other:
     j       terminate  # 处理其他异常
 
@@ -264,6 +270,14 @@ store_valid_addr:
     csrw    mepc, t0
     j       restore_and_return   # 恢复寄存器并返回用户代码
 
+# 处理 store access fault
+handle_store_access_fault:
+    j       trap_other           # 处理为其他异常
+
+# 处理 load access fault
+handle_load_access_fault:
+    j       trap_other           # 处理为其他异常
+
 restore_and_return:
     # 恢复所有寄存器
     lw      ra,   0(sp)
@@ -277,6 +291,7 @@ restore_and_return:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
+
 
 
 
