@@ -165,16 +165,21 @@ __mtrap:
     sw      a6, 104(sp)
     sw      a7, 108(sp)
     
-    # Check the exception type: misaligned load word (0x04)
+    # Check the exception type
     csrr    t0, mcause          # Load the cause into t0
     li      t1, 0x04            # Misaligned load word cause
-    beq     t0, t1, handle_misaligned_load
+    li      t2, 0x05            # Load access fault cause
+    li      t3, 0x06            # Misaligned store cause
+
+    beq     t0, t1, handle_misaligned_load    # Misaligned load
+    beq     t0, t2, handle_load_access_fault  # Load access fault
+    beq     t0, t3, handle_misaligned_store   # Misaligned store
     
-    # If it's not a misaligned load, jump to the terminate function
+    # If it's not any of these, jump to terminate function
     j       terminate
 
 handle_misaligned_load:
-    # Misaligned load handling
+    # Misaligned load handling (same as before)
     csrr    t0, mtval           # Load the misaligned address into t0
     lb      t1, 0(t0)           # Load byte 0
     lb      t2, 1(t0)           # Load byte 1
@@ -199,6 +204,24 @@ handle_misaligned_load:
     addi    t0, t0, 4
     csrw    mepc, t0            # Set mepc to the next instruction
     
+    # Restore registers and return to interrupted instruction
+    j       restore_and_return
+
+handle_load_access_fault:
+    # Handle Load Access Fault (0x05)
+    la      a0, __e5            # Load the error message for Load Access Fault
+    li      a7, PRINT_STR
+    ecall
+    j       terminate
+
+handle_misaligned_store:
+    # Handle Misaligned Store (0x06)
+    la      a0, __e6            # Load the error message for Misaligned Store
+    li      a7, PRINT_STR
+    ecall
+    j       terminate
+
+restore_and_return:
     # Restore registers
     lw      ra, 0(sp)
     lw      s0, 4(sp)
@@ -232,7 +255,6 @@ handle_misaligned_load:
     
     # Return to the interrupted instruction
     mret
-
 
 	
   	
