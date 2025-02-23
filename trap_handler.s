@@ -172,7 +172,7 @@ __mtrap:
     li      t1, 4             # Misaligned load (0x04)
     li      t2, 5             # Load access fault (0x05)
     li      t3, 6             # Misaligned store (0x06)
-    
+
     # 处理 Misaligned Load
     beq     t0, t1, handle_misaligned_load
 
@@ -250,6 +250,11 @@ done_offset:
 
 handle_load_access_fault:
     # 处理 Load Access Fault 异常
+    csrr    t0, mepc         # 获取出错的指令地址
+    li      t1, 0x0          # 如果访问的是 0x0 地址，跳转到终止处理
+    beq     t0, t1, terminate
+
+    # 否则，继续其他的异常处理逻辑
     la      a0, __e5         # 加载错误信息
     li      a7, PRINT_STR
     ecall
