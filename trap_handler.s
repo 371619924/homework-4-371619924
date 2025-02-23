@@ -251,10 +251,6 @@ resume_execution:
     csrrw   sp, mscratch, sp
     mret
 
-terminate:
-    li      a0, -1
-    li      a7, EXIT
-    ecall
 
 
 # This code is taken from the default VRV system code. It prints out
