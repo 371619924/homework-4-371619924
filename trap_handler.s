@@ -132,11 +132,10 @@ __mstart:
   	
     
 __mtrap:
-    # 交换 sp 与 mscratch
-    csrrw   sp, mscratch, sp
-    addi    sp, sp, -128   # 额外分配 8 字节，防止 misaligned stack 访问
+    csrrw   sp, mscratch, sp    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    addi    sp, sp, -120         # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 120 字节
 
-    # 保存所有寄存器
+    # 保存寄存器
     sw      ra,   0(sp)
     sw      gp,   4(sp)
     sw      tp,   8(sp)
@@ -168,53 +167,61 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
-    # 读取 mcause
-    csrr    t0, mcause
-    li      t1, 4
-    beq     t0, t1, misaligned_load
-    li      t1, 6
-    beq     t0, t1, misaligned_store
+    csrr    t0, mcause            # 获取异常类型
+    li      t1, 4                  # misaligned load 异常为 4
+    bne     t0, t1, trap_other    # 如果不是 misaligned load，跳到其他异常处理
 
-    # 处理 `badjump.s` 的非法跳转
-    csrr    t2, mepc
-    beqz    t2, terminate   # 如果 mepc == 0，说明程序错误
-    li      t1, 0x00000003
-    beq     t2, t1, terminate   # 如果 mepc = 0x00000003，也跳转 terminate
+    csrr    t0, mepc              # 获取触发异常的指令地址
+    lw      t1, 0(t0)             # 获取触发异常的指令字
 
-misaligned_load:
-    # 处理 lw misaligned
-    csrr    t5, mtval
-    lbu     t6, 0(t5)
+    andi    t2, t1, 0x7F          # 检查 opcode（低 7 位）是否为 0x03（load 指令）
+    li      t3, 0x03
+    bne     t2, t3, trap_other    # 如果不是 load 指令，跳到其他异常处理
+
+    srai    t2, t1, 12            # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+    andi    t2, t2, 0x7
+    li      t3, 0x2
+    bne     t2, t3, trap_other    # 如果不是 lw 指令，跳到其他异常处理
+
+    srai    t4, t1, 7             # 提取目标寄存器号 rd（位 11:7）
+    andi    t4, t4, 0x1F
+    beq     t4, zero, trap_other  # 如果 rd 为 0，不补丁
+    li      t2, 2
+    beq     t4, t2, trap_other    # 如果 rd 为 sp (x2)，不处理
+    li      t2, 1
+    beq     t4, t2, update_offset # 如果 rd 为 a1 (x1)，跳过
+    addi    t2, t4, -2
+    slli    t2, t2, 2
+    j       done_offset
+
+update_offset:
+    li      t2, 0
+
+done_offset:
+    add     t2, sp, t2            # t2 指向 trap frame 中目标寄存器槽
+    mv      a7, t2                # 保存该地址到 a7（后续用于写入补丁数据）
+
+    # 读取 misaligned load 数据
+    csrr    t5, mtval             # 获取 misaligned load 的地址
+    lbu     t6, 0(t5)             # 加载字节0
     addi    t0, t5, 1
-    lbu     t1, 0(t0)
+    lbu     t1, 0(t0)             # 加载字节1
     addi    t0, t5, 2
-    lbu     t2, 0(t0)
+    lbu     t2, 0(t0)             # 加载字节2
     addi    t0, t5, 3
-    lbu     t3, 0(t0)
+    lbu     t3, 0(t0)             # 加载字节3
+
     slli    t1, t1, 8
     slli    t2, t2, 16
     slli    t3, t3, 24
     or      t6, t6, t1
     or      t6, t6, t2
     or      t6, t6, t3
-    sw      t6, 32(sp)  # 存入 a0
-    j       resume_execution
 
-misaligned_store:
-    # 处理 sw misaligned
-    csrr    t5, mtval
-    lw      t6, 32(sp)  # 取出 a0
-    sb      t6, 0(t5)
-    srli    t6, t6, 8
-    sb      t6, 1(t5)
-    srli    t6, t6, 8
-    sb      t6, 2(t5)
-    srli    t6, t6, 8
-    sb      t6, 3(t5)
-    j       resume_execution
+    # 将修复后的数据写入目标寄存器
+    sw      t6, 0(a7)
 
-resume_execution:
-    # 更新 mepc 跳过异常指令
+    # 更新 mepc（跳过出错指令 4 字节）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
@@ -250,10 +257,17 @@ resume_execution:
     lw      t4,108(sp)
     lw      t5,112(sp)
     lw      t6,116(sp)
-    addi    sp, sp, 128
+    addi    sp, sp, 120
+
+    # 恢复用户 sp
     csrrw   sp, mscratch, sp
+
     mret
 
+trap_other:
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
+    j       terminate
 
 
 
