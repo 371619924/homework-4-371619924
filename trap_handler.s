@@ -130,140 +130,107 @@ __mstart:
 
 	
   	
- __mtrap:
-    csrrw   sp, mscratch, sp    # Switch to kernel stack
-    addi    sp, sp, -120         # Allocate space for 30 registers
-
-    # Save all registers from x1 to x31
+__mtrap:
+    # Swap stack pointer with mscratch
+    mv t0, sp                # Save sp in t0
+    csrr    sp, mscratch      # Load mscratch into sp
+    csrw    mscratch, t0      # Store original sp into mscratch
+    
+    # Save registers (x0-x31)
+    addi    sp, sp, -128      # Allocate space on the stack for saving registers
     sw      ra, 0(sp)
-    sw      gp, 4(sp)
-    sw      tp, 8(sp)
-    sw      t0, 12(sp)
-    sw      t1, 16(sp)
-    sw      t2, 20(sp)
-    sw      s0, 24(sp)
-    sw      s1, 28(sp)
-    sw      a0, 32(sp)
-    sw      a1, 36(sp)
-    sw      a2, 40(sp)
-    sw      a3, 44(sp)
-    sw      a4, 48(sp)
-    sw      a5, 52(sp)
-    sw      a6, 56(sp)
-    sw      a7, 60(sp)
-    sw      s2, 64(sp)
-    sw      s3, 68(sp)
-    sw      s4, 72(sp)
-    sw      s5, 76(sp)
-    sw      s6, 80(sp)
-    sw      s7, 84(sp)
-    sw      s8, 88(sp)
-    sw      s9, 92(sp)
-    sw      s10, 96(sp)
-    sw      s11, 100(sp)
-    sw      t3, 104(sp)
-    sw      t4, 108(sp)
-    sw      t5, 112(sp)
-    sw      t6, 116(sp)
-
-    csrr    t0, mcause           # Check cause of exception
-    li      t1, 4
-    bne     t0, t1, check_store   # If it's not a misaligned load, check for misaligned store
-
-    # Misaligned Load Handling
-    csrr    t0, mepc              # Get the faulting instruction address
-    lw      t1, 0(t0)             # Load the instruction at that address
-    andi    t2, t1, 0x7F          # Check if it's a load instruction (opcode == 0x03)
-    li      t3, 0x03
-    bne     t2, t3, trap_other    # If not a load instruction, handle other exceptions
+    sw      s0, 4(sp)
+    sw      s1, 8(sp)
+    sw      s2, 12(sp)
+    sw      s3, 16(sp)
+    sw      s4, 20(sp)
+    sw      s5, 24(sp)
+    sw      s6, 28(sp)
+    sw      s7, 32(sp)
+    sw      s8, 36(sp)
+    sw      s9, 40(sp)
+    sw      s10, 44(sp)
+    sw      s11, 48(sp)
+    sw      t0, 52(sp)
+    sw      t1, 56(sp)
+    sw      t2, 60(sp)
+    sw      t3, 64(sp)
+    sw      t4, 68(sp)
+    sw      t5, 72(sp)
+    sw      t6, 76(sp)
+    sw      a0, 80(sp)
+    sw      a1, 84(sp)
+    sw      a2, 88(sp)
+    sw      a3, 92(sp)
+    sw      a4, 96(sp)
+    sw      a5, 100(sp)
+    sw      a6, 104(sp)
+    sw      a7, 108(sp)
     
-    srai    t2, t1, 12            # Check funct3 (0x2 for lw)
-    andi    t2, t2, 0x7
-    li      t3, 0x2
-    bne     t2, t3, trap_other    # If not a lw instruction, handle other exceptions
+    # Check the exception type: misaligned load word (0x04)
+    csrr    t0, mcause          # Load the cause into t0
+    li      t1, 0x04            # Misaligned load word cause
+    beq     t0, t1, handle_misaligned_load
     
-    # Handle misaligned load and patch the result
-    csrr    t5, mtval             # Get the misaligned address
-    lbu     t6, 0(t5)             # Load byte 0
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)             # Load byte 1
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)             # Load byte 2
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)             # Load byte 3
+    # If it's not a misaligned load, jump to the terminate function
+    j       terminate
 
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t6, t6, t1
-    or      t6, t6, t2
-    or      t6, t6, t3
+handle_misaligned_load:
+    # Misaligned load handling
+    csrr    t0, mtval           # Load the misaligned address into t0
+    lb      t1, 0(t0)           # Load byte 0
+    lb      t2, 1(t0)           # Load byte 1
+    lb      t3, 2(t0)           # Load byte 2
+    lb      t4, 3(t0)           # Load byte 3
     
-    # Patch the misaligned load into the target register
-    csrr    t4, mepc
-    addi    t4, t4, 4
-    csrw    mepc, t4              # Skip the faulty instruction
-    sw      t6, 0(a7)             # Store patched result
-
+    # Combine the bytes into a single word
+    or      t1, t1, t2, lsl 8   # Combine byte 1 and 2
+    or      t1, t1, t3, lsl 16  # Combine byte 3
+    or      t1, t1, t4, lsl 24  # Combine byte 4
+    
+    # Store the result in a0 (destination register)
+    csrr    t0, mepc            # Load mepc into t0 (current instruction address)
+    slli    t0, t0, 2           # Multiply by 4 to get the word offset
+    lw      t5, 0(sp)           # Load destination register index (a0)
+    sw      t1, 0(t5)           # Store the result into the destination register
+    
+    # Increment mepc to the next instruction
+    addi    t0, t0, 4
+    csrw    mepc, t0            # Set mepc to the next instruction
+    
     # Restore registers
     lw      ra, 0(sp)
-    lw      gp, 4(sp)
-    lw      tp, 8(sp)
-    lw      t0, 12(sp)
-    lw      t1, 16(sp)
-    lw      t2, 20(sp)
-    lw      s0, 24(sp)
-    lw      s1, 28(sp)
-    lw      a0, 32(sp)
-    lw      a1, 36(sp)
-    lw      a2, 40(sp)
-    lw      a3, 44(sp)
-    lw      a4, 48(sp)
-    lw      a5, 52(sp)
-    lw      a6, 56(sp)
-    lw      a7, 60(sp)
-    lw      s2, 64(sp)
-    lw      s3, 68(sp)
-    lw      s4, 72(sp)
-    lw      s5, 76(sp)
-    lw      s6, 80(sp)
-    lw      s7, 84(sp)
-    lw      s8, 88(sp)
-    lw      s9, 92(sp)
-    lw      s10, 96(sp)
-    lw      s11, 100(sp)
-    lw      t3, 104(sp)
-    lw      t4, 108(sp)
-    lw      t5, 112(sp)
-    lw      t6, 116(sp)
-
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    mret
-
-check_store:
-    li      t1, 6                  # Misaligned store check (mcause == 6)
-    bne     t0, t1, trap_other     # If not misaligned store, handle other exceptions
+    lw      s0, 4(sp)
+    lw      s1, 8(sp)
+    lw      s2, 12(sp)
+    lw      s3, 16(sp)
+    lw      s4, 20(sp)
+    lw      s5, 24(sp)
+    lw      s6, 28(sp)
+    lw      s7, 32(sp)
+    lw      s8, 36(sp)
+    lw      s9, 40(sp)
+    lw      s10, 44(sp)
+    lw      s11, 48(sp)
+    lw      t0, 52(sp)
+    lw      t1, 56(sp)
+    lw      t2, 60(sp)
+    lw      t3, 64(sp)
+    lw      t4, 68(sp)
+    lw      t5, 72(sp)
+    lw      t6, 76(sp)
+    lw      a0, 80(sp)
+    lw      a1, 84(sp)
+    lw      a2, 88(sp)
+    lw      a3, 92(sp)
+    lw      a4, 96(sp)
+    lw      a5, 100(sp)
+    lw      a6, 104(sp)
+    lw      a7, 108(sp)
+    addi    sp, sp, 128         # Restore stack pointer
     
-    # Misaligned Store Handling (similar to misaligned load but for stores)
-    csrr    t0, mepc              # Get the faulting instruction address
-    lw      t1, 0(t0)             # Load the instruction at that address
-    andi    t2, t1, 0x7F          # Check if it's a store instruction (opcode == 0x23)
-    li      t3, 0x23
-    bne     t2, t3, trap_other    # If not a store instruction, handle other exceptions
-
-    # If misaligned store, skip or terminate (depends on how you want to handle)
-    # Here we just print and terminate the program
-    la      a0, __e6               # Load message for misaligned store
-    li      a7, PRINT_STR
-    ecall
-
-    j       terminate
-
-trap_other:
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    j       terminate
+    # Return to the interrupted instruction
+    mret
 
 
 
