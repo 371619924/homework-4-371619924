@@ -324,11 +324,6 @@ restore_registers:
     csrrw   sp, mscratch, sp
     mret
 
-    trap_other:
-    addi    sp, sp, 124
-    csrrw   sp, mscratch, sp
-    j       terminate
-
 
 
 
