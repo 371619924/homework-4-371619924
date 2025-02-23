@@ -219,9 +219,9 @@ set_offset_done:
     li      t3, 1
     beq     t2, t3, lw_case1
     li      t3, 2
-    beq     t2, lw_case2
+    beq     t2, t3, lw_case2
     li      t3, 3
-    beq     t2, lw_case3
+    beq     t2, t3, lw_case3
 lw_case0:
     mv      t6, t0
     j       store_lw
@@ -267,25 +267,16 @@ handle_misaligned_sw:
     sub     t5, t5, t2
 
     # 读取存储值
-    li      t3, 1
-    beq     t4, t3, set_offset_zero_sw
-    addi    t3, t4, -2
-    slli    t3, t3, 2
-    j       set_offset_done_sw
-set_offset_zero_sw:
-    li      t3, 0
-set_offset_done_sw:
-    add     t3, sp, t3
-    lw      t6, 0(t3)
+    lw      t6, 0(sp)
 
     # 修复并存储
     beq     t2, zero, sw_case0
     li      t3, 1
     beq     t2, t3, sw_case1
     li      t3, 2
-    beq     t2, sw_case2
+    beq     t2, t3, sw_case2
     li      t3, 3
-    beq     t2, sw_case3
+    beq     t2, t3, sw_case3
 sw_case0:
     sw      t6, 0(t5)
     j       store_done
@@ -336,6 +327,7 @@ restore_registers:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
+
 
 
 
