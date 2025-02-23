@@ -131,11 +131,10 @@ __mstart:
 	
   	
 __mtrap:
-    csrrw   sp, mscratch, sp        # 交换 sp 和 mscratch
-    addi    sp, sp, -120            # 分配 trap frame 空间
-
-    # 保存所有寄存器
-    sw      ra,   0(sp)
+    # Save user registers
+    csrrw   sp, mscratch, sp            # Swap sp with mscratch to use kernel stack
+    addi    sp, sp, -120                # Allocate space for 30 registers
+    sw      ra,   0(sp)                 # Save registers
     sw      gp,   4(sp)
     sw      tp,   8(sp)
     sw      t0,  12(sp)
@@ -161,125 +160,57 @@ __mtrap:
     sw      s9,  92(sp)
     sw      s10, 96(sp)
     sw      s11,100(sp)
-    sw      t3,104(sp)
-    sw      t4,108(sp)
-    sw      t5,112(sp)
-    sw      t6,116(sp)
+    sw      t3, 104(sp)
+    sw      t4, 108(sp)
+    sw      t5, 112(sp)
+    sw      t6, 116(sp)
 
-    # 获取异常类型
-    csrr    t0, mcause              # 获取异常原因
-    li      t1, 4                   # misaligned load 异常为 4
-    beq     t0, t1, handle_misaligned_load  # 处理 misaligned load
+    # Check for misaligned load
+    csrr    t0, mcause                 # Get cause of the exception
+    li      t1, 4                       # Misaligned load exception code
+    bne     t0, t1, trap_other         # If not a misaligned load, handle other exceptions
 
-    li      t1, 6                   # misaligned store 异常为 6
-    beq     t0, t1, handle_misaligned_store # 处理 misaligned store
+    # Handle misaligned load address
+    csrr    t0, mepc                   # Load the faulting instruction address
+    lw      t1, 0(t0)                  # Fetch the instruction
+    andi    t2, t1, 0x7F               # Extract opcode (lower 7 bits)
+    li      t3, 0x03                   # Opcode for load instructions (lw)
+    bne     t2, t3, trap_other         # If it's not a load, handle other exceptions
 
-    li      t1, 5                   # store access fault 异常为 5
-    beq     t0, t1, handle_store_access_fault # 处理 store access fault
-
-    li      t1, 7                   # load access fault 异常为 7
-    beq     t0, t1, handle_load_access_fault # 处理 load access fault
-
-trap_other:
-    j       terminate  # 处理其他异常
-
-# 处理 misaligned load 异常
-handle_misaligned_load:
-    csrr    t5, mtval            # 获取 misaligned 地址
-    bnez    t5, load_valid_addr  # 确保地址有效
-    j       trap_other           # 如果无效，处理为其他异常
-
-load_valid_addr:
-    csrr    t0, mepc             # 获取当前指令地址
-    lw      t1, 0(t0)            # 获取指令
-    andi    t2, t1, 0x7F         # 检查是否是有效的 load 操作
-    li      t3, 0x03
-    bne     t2, t3, trap_other   # 如果不是 load，跳转到其他异常处理
-
-    srai    t2, t1, 12           # 提取 funct3 (load 类型)
+    # Check for lw instruction (funct3 == 0x2)
+    srai    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 0x2              # 检查是否是 lw（load word）
-    bne     t2, t3, trap_other   # 如果不是 lw，处理其他异常
+    li      t3, 0x2                    # funct3 for lw
+    bne     t2, t3, trap_other         # If not lw, handle other exceptions
 
-    # 提取寄存器和地址，确保对齐
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F
-    addi    t2, sp, 32
-    add     t2, t2, t4
+    # Handle misaligned load
+    csrr    t5, mtval                  # Get the misaligned load address (mtval)
+    lbu     t6, 0(t5)                  # Load byte 0
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)                  # Load byte 1
+    addi    t0, t5, 2
+    lbu     t2, 0(t0)                  # Load byte 2
+    addi    t0, t5, 3
+    lbu     t3, 0(t0)                  # Load byte 3
 
-    lbu     t6, 0(t5)            # 以字节方式加载并调整对齐
-    addi    t5, t5, 1
-    lbu     t1, 0(t5)
-    addi    t5, t5, 1
-    lbu     t2, 0(t5)
-    addi    t5, t5, 1
-    lbu     t3, 0(t5)
-
-    # 将字节合并成一个字（32位）
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t6, t6, t1
+    slli    t1, t1, 8                  # Shift byte 1 into place
+    slli    t2, t2, 16                 # Shift byte 2 into place
+    slli    t3, t3, 24                 # Shift byte 3 into place
+    or      t6, t6, t1                 # Combine bytes into a 32-bit word
     or      t6, t6, t2
     or      t6, t6, t3
 
-    sw      t6, 0(t2)            # 将对齐的数据存回
+    # Store the result back to the register
+    csrr    t4, mepc                   # Get the faulting instruction's register index
+    add     t4, sp, t4                 # Calculate the register's position in the trap frame
+    sw      t6, 0(t4)                  # Store the reconstructed data
+
+    # Skip over the misaligned instruction
     csrr    t0, mepc
-    addi    t0, t0, 4            # 跳到下一条指令
-    csrw    mepc, t0
-    j       restore_and_return   # 恢复寄存器并返回用户代码
+    addi    t0, t0, 4
+    csrw    mepc, t0                   # Set mepc to skip the misaligned instruction
 
-# 处理 misaligned store 异常
-handle_misaligned_store:
-    csrr    t5, mtval            # 获取 misaligned store 地址
-    bnez    t5, store_valid_addr # 确保地址有效
-    j       trap_other           # 如果无效，处理为其他异常
-
-store_valid_addr:
-    csrr    t0, mepc             # 获取当前指令地址
-    lw      t1, 0(t0)            # 获取指令
-    andi    t2, t1, 0x7F         # 检查是否是有效的 store 操作
-    li      t3, 0x23
-    bne     t2, t3, trap_other   # 如果不是 store，跳转到其他异常处理
-
-    # 提取 funct3 (store 类型)
-    srai    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 0x2              # 检查是否是 sw（store word）
-    bne     t2, t3, trap_other   # 如果不是 sw，处理其他异常
-
-    srai    t4, t1, 20           # 提取源寄存器（rs2）
-    andi    t4, t4, 0x1F
-    addi    t2, sp, 32
-    add     t2, t2, t4
-    lw      t6, 0(t2)            # 获取要存储的值
-
-    sb      t6, 0(t5)            # 以字节方式存储（逐字节存储）
-    srli    t6, t6, 8
-    addi    t5, t5, 1
-    sb      t6, 0(t5)
-    srli    t6, t6, 8
-    addi    t5, t5, 1
-    sb      t6, 0(t5)
-    srli    t6, t6, 8
-    addi    t5, t5, 1
-    sb      t6, 0(t5)
-
-    csrr    t0, mepc
-    addi    t0, t0, 4            # 跳到下一条指令
-    csrw    mepc, t0
-    j       restore_and_return   # 恢复寄存器并返回用户代码
-
-# 处理 store access fault
-handle_store_access_fault:
-    j       trap_other           # 处理为其他异常
-
-# 处理 load access fault
-handle_load_access_fault:
-    j       trap_other           # 处理为其他异常
-
-restore_and_return:
-    # 恢复所有寄存器
+    # Restore the saved registers
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -288,10 +219,38 @@ restore_and_return:
     lw      t2,  20(sp)
     lw      s0,  24(sp)
     lw      s1,  28(sp)
-    addi    sp, sp, 120
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    lw      s2,  64(sp)
+    lw      s3,  68(sp)
+    lw      s4,  72(sp)
+    lw      s5,  76(sp)
+    lw      s6,  80(sp)
+    lw      s7,  84(sp)
+    lw      s8,  88(sp)
+    lw      s9,  92(sp)
+    lw      s10, 96(sp)
+    lw      s11,100(sp)
+    lw      t3, 104(sp)
+    lw      t4, 108(sp)
+    lw      t5, 112(sp)
+    lw      t6, 116(sp)
+
+    # Restore user sp
     csrrw   sp, mscratch, sp
+
     mret
 
+trap_other:
+    addi    sp, sp, 120
+    csrrw   sp, mscratch, sp
+    j       terminate
 
 
 
