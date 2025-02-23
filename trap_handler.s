@@ -134,9 +134,9 @@ __mstart:
 __mtrap:
     # 交换 sp 与 mscratch
     csrrw   sp, mscratch, sp
-    addi    sp, sp, -120
+    addi    sp, sp, -128   # 额外分配 8 字节，防止 misaligned stack 访问
 
-    # 保存寄存器
+    # 保存所有寄存器
     sw      ra,   0(sp)
     sw      gp,   4(sp)
     sw      tp,   8(sp)
@@ -174,9 +174,12 @@ __mtrap:
     beq     t0, t1, misaligned_load
     li      t1, 6
     beq     t0, t1, misaligned_store
-    li      t1, 0x00000000
+
+    # 处理 `badjump.s` 的非法跳转
     csrr    t2, mepc
-    beq     t2, t1, terminate   # 处理 badjump.s 的错误
+    beqz    t2, terminate   # 如果 mepc == 0，说明程序错误
+    li      t1, 0x00000003
+    beq     t2, t1, terminate   # 如果 mepc = 0x00000003，也跳转 terminate
 
 misaligned_load:
     # 处理 lw misaligned
@@ -247,9 +250,10 @@ resume_execution:
     lw      t4,108(sp)
     lw      t5,112(sp)
     lw      t6,116(sp)
-    addi    sp, sp, 120
+    addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
+
 
 
 
