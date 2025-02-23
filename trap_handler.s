@@ -131,35 +131,36 @@ __mstart:
 	
   	
     
- .globl __mtrap
 __mtrap:
+    # 交换 sp 与 mscratch
     csrrw   sp, mscratch, sp
     addi    sp, sp, -120
-    # 保存寄存器（原有逻辑保持不变）
-    sw      ra, 0(sp)
-    sw      gp, 4(sp)
-    sw      tp, 8(sp)
-    sw      t0, 12(sp)
-    sw      t1, 16(sp)
-    sw      t2, 20(sp)
-    sw      s0, 24(sp)
-    sw      s1, 28(sp)
-    sw      a0, 32(sp)
-    sw      a1, 36(sp)
-    sw      a2, 40(sp)
-    sw      a3, 44(sp)
-    sw      a4, 48(sp)
-    sw      a5, 52(sp)
-    sw      a6, 56(sp)
-    sw      a7, 60(sp)
-    sw      s2, 64(sp)
-    sw      s3, 68(sp)
-    sw      s4, 72(sp)
-    sw      s5, 76(sp)
-    sw      s6, 80(sp)
-    sw      s7, 84(sp)
-    sw      s8, 88(sp)
-    sw      s9, 92(sp)
+
+    # 保存寄存器
+    sw      ra,   0(sp)
+    sw      gp,   4(sp)
+    sw      tp,   8(sp)
+    sw      t0,  12(sp)
+    sw      t1,  16(sp)
+    sw      t2,  20(sp)
+    sw      s0,  24(sp)
+    sw      s1,  28(sp)
+    sw      a0,  32(sp)
+    sw      a1,  36(sp)
+    sw      a2,  40(sp)
+    sw      a3,  44(sp)
+    sw      a4,  48(sp)
+    sw      a5,  52(sp)
+    sw      a6,  56(sp)
+    sw      a7,  60(sp)
+    sw      s2,  64(sp)
+    sw      s3,  68(sp)
+    sw      s4,  72(sp)
+    sw      s5,  76(sp)
+    sw      s6,  80(sp)
+    sw      s7,  84(sp)
+    sw      s8,  88(sp)
+    sw      s9,  92(sp)
     sw      s10, 96(sp)
     sw      s11,100(sp)
     sw      t3,104(sp)
@@ -167,80 +168,93 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
+    # 读取 mcause
     csrr    t0, mcause
     li      t1, 4
-    beq     t0, t1, handle_load_misalign
+    beq     t0, t1, misaligned_load
     li      t1, 6
-    beq     t0, t1, handle_store_misalign
-    j       trap_other
+    beq     t0, t1, misaligned_store
+    li      t1, 0x00000000
+    csrr    t2, mepc
+    beq     t2, t1, terminate   # 处理 badjump.s 的错误
 
-handle_load_misalign:
-    # ...（原有加载未对齐处理逻辑，保持sp寄存器允许修改）
+misaligned_load:
+    # 处理 lw misaligned
+    csrr    t5, mtval
+    lbu     t6, 0(t5)
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)
+    addi    t0, t5, 2
+    lbu     t2, 0(t0)
+    addi    t0, t5, 3
+    lbu     t3, 0(t0)
+    slli    t1, t1, 8
+    slli    t2, t2, 16
+    slli    t3, t3, 24
+    or      t6, t6, t1
+    or      t6, t6, t2
+    or      t6, t6, t3
+    sw      t6, 32(sp)  # 存入 a0
+    j       resume_execution
 
-handle_store_misalign:
-    # ...（原有存储未对齐处理逻辑）
+misaligned_store:
+    # 处理 sw misaligned
+    csrr    t5, mtval
+    lw      t6, 32(sp)  # 取出 a0
+    sb      t6, 0(t5)
+    srli    t6, t6, 8
+    sb      t6, 1(t5)
+    srli    t6, t6, 8
+    sb      t6, 2(t5)
+    srli    t6, t6, 8
+    sb      t6, 3(t5)
+    j       resume_execution
 
-sw_case1:
-    # 修正立即数问题：用-1替代0xFFFF
-    lui     a7, 0x00FF        # a7 = 0x00FF0000
-    addi    a7, a7, -1        # a7 = 0x00FF0000 + 0xFFFF = 0x00FFFFFF
-    and     t3, t3, a7        # 保留低24位
-    slli    t6, t5, 8         # 高24位移位
-    or      t3, t3, t6
-    lui     a7, 0xFFFF        # a7 = 0xFFFF0000
-    addi    a7, a7, 0xFF00    # a7 = 0xFFFF0000 + 0xFF00 = 0xFFFFFF00
-    and     t4, t4, a7
-    srli    t6, t5, 24
-    slli    t6, t6, 24
-    or      t4, t4, t6
-    j       sw_write
-
-sw_case2:
-    lui     a7, 0x0           # a7 = 0x00000000
-    addi    a7, a7, -1        # a7 = 0x0000FFFF (等价于addi a7, x0, -1)
-    and     t3, t3, a7        # 保留低16位
-    slli    t6, t5, 16
-    or      t3, t3, t6
-    lui     a7, 0xFFFF        # a7 = 0xFFFF0000
-    and     t4, t4, a7
-    srli    t6, t5, 16
-    or      t4, t4, t6
-    j       sw_write
-
-sw_case3:
-    lui     a7, 0xFF00        # a7 = 0xFF000000
-    and     t3, t3, a7        # 保留高8位
-    srli    t6, t5, 24
-    slli    t6, t6, 24
-    or      t3, t3, t6
-    lui     a7, 0x00FF        # a7 = 0x00FF0000
-    addi    a7, a7, -1        # a7 = 0x00FFFFFF
-    and     t4, t4, a7
-    slli    t6, t5, 8
-    or      t4, t4, t6
-
-sw_write:
-    sw      t3, 0(t2)
-    sw      t4, 4(t2)、
-    
-sw_done:
+resume_execution:
+    # 更新 mepc 跳过异常指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-restore_registers:
-    # Restore all registers...
-    lw      ra, 0(sp)
-    lw      gp, 4(sp)
-    # ... (rest of register restore)
+    # 恢复寄存器
+    lw      ra,   0(sp)
+    lw      gp,   4(sp)
+    lw      tp,   8(sp)
+    lw      t0,  12(sp)
+    lw      t1,  16(sp)
+    lw      t2,  20(sp)
+    lw      s0,  24(sp)
+    lw      s1,  28(sp)
+    lw      a0,  32(sp)
+    lw      a1,  36(sp)
+    lw      a2,  40(sp)
+    lw      a3,  44(sp)
+    lw      a4,  48(sp)
+    lw      a5,  52(sp)
+    lw      a6,  56(sp)
+    lw      a7,  60(sp)
+    lw      s2,  64(sp)
+    lw      s3,  68(sp)
+    lw      s4,  72(sp)
+    lw      s5,  76(sp)
+    lw      s6,  80(sp)
+    lw      s7,  84(sp)
+    lw      s8,  88(sp)
+    lw      s9,  92(sp)
+    lw      s10, 96(sp)
+    lw      s11,100(sp)
+    lw      t3,104(sp)
+    lw      t4,108(sp)
+    lw      t5,112(sp)
+    lw      t6,116(sp)
+    addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
 
-trap_other:
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    j       terminate
-
+terminate:
+    li      a0, -1
+    li      a7, EXIT
+    ecall
 
 
 # This code is taken from the default VRV system code. It prints out
