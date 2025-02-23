@@ -167,42 +167,27 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
-    # Only patch misaligned load word exceptions.
+    # Only patch misaligned load word and store word exceptions.
     csrr    t0, mcause
-    li      t1, 4
-    bne     t0, t1, trap_other
+    li      t1, 4          # Misaligned load word exception
+    li      t2, 6          # Misaligned store word exception
+    beq     t0, t1, handle_misaligned_load
+    beq     t0, t2, handle_misaligned_store
+    j       trap_other
 
-    # Fetch the faulting instruction.
+handle_misaligned_load:
+    # Handle misaligned load word exception.
     csrr    t0, mepc              # t0 = faulting instruction address
     lw      t1, 0(t0)             # t1 = instruction word
     andi    t2, t1, 0x7F          # extract opcode
     li      t3, 0x03
     bne     t2, t3, trap_other
-    srai    t2, t1, 12           # t2 = instruction >> 12
-    andi    t2, t2, 0x7          # t2 = funct3 field
+    srai    t2, t1, 12            # t2 = instruction >> 12
+    andi    t2, t2, 0x7           # t2 = funct3 field
     li      t3, 2
-    bne     t2, t3, trap_other   # only handle lw (funct3==2)
+    bne     t2, t3, trap_other    # only handle lw (funct3==2)
 
-    # Extract destination register rd.
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other      # if rd==x0, don’t patch
-    li      t3, 2
-    beq     t4, t3, trap_other        # if rd==sp (x2), don’t patch
-
-    # Compute pointer to trap frame slot for rd.
-    li      t3, 1
-    beq     t4, t3, set_offset_zero
-    addi    t3, t4, -2
-    slli    t3, t3, 2
-    j       set_offset_done
-set_offset_zero:
-    li      t3, 0
-set_offset_done:
-    add     t3, sp, t3       # t3 now points to saved slot for rd
-    mv      a7, t3           # save that pointer in a7
-
-    # Emulate misaligned lw:
+    # Emulate misaligned load word.
     csrr    t5, mtval        # t5 = faulting effective address
     andi    t2, t5, 3        # t2 = misalignment offset (A mod 4)
     sub     t5, t5, t2       # t5 = aligned base address
@@ -241,7 +226,62 @@ store_lw:
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
+    j       restore_regs
 
+handle_misaligned_store:
+    # Handle misaligned store word exception.
+    csrr    t0, mepc              # t0 = faulting instruction address
+    lw      t1, 0(t0)             # t1 = instruction word
+    andi    t2, t1, 0x7F          # extract opcode
+    li      t3, 0x23
+    bne     t2, t3, trap_other
+    srai    t2, t1, 12            # t2 = instruction >> 12
+    andi    t2, t2, 0x7           # t2 = funct3 field
+    li      t3, 3
+    bne     t2, t3, trap_other    # only handle sw (funct3==3)
+
+    # Emulate misaligned store word.
+    csrr    t5, mtval        # t5 = faulting effective address
+    andi    t2, t5, 3        # t2 = misalignment offset (A mod 4)
+    sub     t5, t5, t2       # t5 = aligned base address
+    lw      t0, 0(t5)        # t0 = lower 32-bit word from base
+    lw      t1, 4(t5)        # t1 = upper 32-bit word from base+4
+
+    # Recombine the two words according to offset (stored in t2)
+    beq     t2, zero, sw_case0
+    li      t3, 1
+    beq     t2, t3, sw_case1
+    li      t3, 2
+    beq     t2, t3, sw_case2
+    li      t3, 3
+    beq     t2, t3, sw_case3
+sw_case0:
+    mv      t6, t0
+    j       store_sw
+sw_case1:
+    srli    t2, t0, 8         # shift lower word right by 8
+    slli    t3, t1, 24        # shift upper word left by 24
+    or      t6, t2, t3        # combine
+    j       store_sw
+sw_case2:
+    srli    t2, t0, 16        # shift lower word right by 16
+    slli    t3, t1, 16        # shift upper word left by 16
+    or      t6, t2, t3
+    j       store_sw
+sw_case3:
+    srli    t2, t0, 24        # shift lower word right by 24
+    slli    t3, t1, 8         # shift upper word left by 8
+    or      t6, t2, t3
+store_sw:
+    sw      t6, 0(a7)         # patch the saved register value
+
+    # Advance mepc to skip the faulting instruction.
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    j       restore_regs
+
+restore_regs:
     # Restore saved registers.
     lw      ra,   0(sp)
     lw      gp,   4(sp)
@@ -282,7 +322,6 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
-
 
 
 # This code is taken from the default VRV system code. It prints out
