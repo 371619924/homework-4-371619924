@@ -131,12 +131,11 @@ __mstart:
 	
   	
     
-### Trap handler
 __mtrap:
-    csrrw   sp, mscratch, sp        # Swap sp and mscratch
-    addi    sp, sp, -120            # Allocate space for registers
+    csrrw   sp, mscratch, sp        # 交换 sp 和 mscratch
+    addi    sp, sp, -120            # 分配 trap frame 空间
 
-    # Save all registers
+    # 保存所有寄存器
     sw      ra,   0(sp)
     sw      gp,   4(sp)
     sw      tp,   8(sp)
@@ -168,62 +167,104 @@ __mtrap:
     sw      t5,112(sp)
     sw      t6,116(sp)
 
-    # Check exception cause
-    csrr    t0, mcause
-    li      t1, 4                   # Misaligned load (mcause=4)
-    bne     t0, t1, trap_other      # Handle only misaligned load
+    # 获取异常类型
+    csrr    t0, mcause              # 获取异常原因
+    li      t1, 4                   # misaligned load 异常为 4
+    beq     t0, t1, handle_misaligned_load  # 处理 misaligned load
 
-    # Check if the instruction is lw
+    li      t1, 6                   # misaligned store 异常为 6
+    beq     t0, t1, handle_misaligned_store # 处理 misaligned store
+
+trap_other:
+    j       terminate  # 处理其他异常
+
+# 处理 misaligned store 异常
+handle_misaligned_store:
+    csrr    t5, mtval
+    bnez    t5, store_valid_addr
+    j       trap_other
+
+store_valid_addr:
     csrr    t0, mepc
-    lw      t1, 0(t0)               # Fetch the instruction
-    andi    t2, t1, 0x7F            # Extract opcode
-    li      t3, 0x03                # lw opcode
-    bne     t2, t3, trap_other      # Not lw? Jump to terminate
-    srli    t2, t1, 12              # Extract funct3
+    lw      t1, 0(t0)
+
+    andi    t2, t1, 0x7F
+    li      t3, 0x23  # store 指令 opcode
+    bne     t2, t3, trap_other  
+
+    srai    t2, t1, 12  # 检查 funct3 是否为 sw
     andi    t2, t2, 0x7
-    li      t3, 0x2                 # lw funct3=0x2
-    bne     t2, t3, trap_other      # Not lw? Jump to terminate
+    li      t3, 0x2
+    bne     t2, t3, trap_other  
 
-    # Extract rd register number
-    srli    t4, t1, 7
-    andi    t4, t4, 0x1F            # rd = (inst >> 7) & 0x1F
-    beqz    t4, trap_other          # rd=x0? Skip
-    li      t2, 1
-    beq     t4, t2, trap_other      # rd=x1(ra)? Skip
-    li      t2, 2
-    beq     t4, t2, trap_other      # rd=x2(sp)? Skip
+    srai    t4, t1, 20  # 提取源寄存器号 rs2
+    andi    t4, t4, 0x1F
+    addi    t2, sp, 32
+    add     t2, t2, t4
+    lw      t6, 0(t2)
 
-    # Calculate offset in stack frame for rd
-    li      t2, 32                  # Base offset for a0 (x10)
-    addi    t3, t4, -10             # rd - 10
-    slli    t3, t3, 2               # Multiply by 4
-    add     t2, t2, t3              # Offset = 32 + (rd -10)*4
-    add     t2, sp, t2              # Address to store the result
+    sb      t6, 0(t5)
+    srli    t6, t6, 8
+    addi    t5, t5, 1
+    sb      t6, 0(t5)
+    srli    t6, t6, 8
+    addi    t5, t5, 1
+    sb      t6, 0(t5)
+    srli    t6, t6, 8
+    addi    t5, t5, 1
+    sb      t6, 0(t5)
 
-    # Load misaligned data
-    csrr    t5, mtval               # Faulty address
-    lbu     t6, 0(t5)               # Byte 0
-    lbu     t0, 1(t5)               # Byte 1
-    lbu     t1, 2(t5)               # Byte 2
-    lbu     t3, 3(t5)               # Byte 3
-
-    # Combine bytes into 32-bit value (little-endian)
-    slli    t0, t0, 8
-    slli    t1, t1, 16
-    slli    t3, t3, 24
-    or      t6, t6, t0
-    or      t6, t6, t1
-    or      t6, t6, t3
-
-    # Store result to the correct register slot
-    sw      t6, 0(t2)
-
-    # Skip the faulting instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
+    j       restore_and_return
 
-    # Restore registers
+# 处理 misaligned load 异常
+handle_misaligned_load:
+    csrr    t5, mtval
+    bnez    t5, load_valid_addr
+    j       trap_other
+
+load_valid_addr:
+    csrr    t0, mepc
+    lw      t1, 0(t0)
+
+    andi    t2, t1, 0x7F
+    li      t3, 0x03  # load 指令 opcode
+    bne     t2, t3, trap_other
+
+    srai    t2, t1, 12
+    andi    t2, t2, 0x7
+    li      t3, 0x2  # lw 指令 funct3
+    bne     t2, t3, trap_other
+
+    srai    t4, t1, 7
+    andi    t4, t4, 0x1F
+    addi    t2, sp, 32
+    add     t2, t2, t4
+
+    lbu     t6, 0(t5)
+    addi    t5, t5, 1
+    lbu     t1, 0(t5)
+    addi    t5, t5, 1
+    lbu     t2, 0(t5)
+    addi    t5, t5, 1
+    lbu     t3, 0(t5)
+
+    slli    t1, t1, 8
+    slli    t2, t2, 16
+    slli    t3, t3, 24
+    or      t6, t6, t1
+    or      t6, t6, t2
+    or      t6, t6, t3
+
+    sw      t6, 0(t2)
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    j       restore_and_return
+
+restore_and_return:
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -232,37 +273,9 @@ __mtrap:
     lw      t2,  20(sp)
     lw      s0,  24(sp)
     lw      s1,  28(sp)
-    lw      a0,  32(sp)
-    lw      a1,  36(sp)
-    lw      a2,  40(sp)
-    lw      a3,  44(sp)
-    lw      a4,  48(sp)
-    lw      a5,  52(sp)
-    lw      a6,  56(sp)
-    lw      a7,  60(sp)
-    lw      s2,  64(sp)
-    lw      s3,  68(sp)
-    lw      s4,  72(sp)
-    lw      s5,  76(sp)
-    lw      s6,  80(sp)
-    lw      s7,  84(sp)
-    lw      s8,  88(sp)
-    lw      s9,  92(sp)
-    lw      s10, 96(sp)
-    lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     mret
-
-trap_other:
-    # Jump to terminate for other exceptions
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    j       terminate
 
 
 
