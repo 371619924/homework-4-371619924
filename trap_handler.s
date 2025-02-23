@@ -209,6 +209,11 @@ done_offset:
 
     # 读取 misaligned load 数据
     csrr    t5, mtval               # 获取 misaligned load 地址
+    bnez    t5, handle_valid_addr   # 如果 mtval 非零，继续处理
+    j       trap_other              # 如果 mtval 为零，跳转到其他处理
+
+handle_valid_addr:
+    # 读取四个字节数据
     lbu     t6, 0(t5)               # 加载字节0
     addi    t0, t5, 1
     lbu     t1, 0(t0)               # 加载字节1
@@ -273,6 +278,8 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
+
 
 
 
