@@ -177,7 +177,7 @@ __mtrap:
     j       trap_other
 
 handle_load:
-    # 可选检查：若 mepc 为 0 则无法处理，跳转到 trap_other
+    # 检查 mepc 是否为 0，如果是，则无法修复 misaligned load 异常，跳转到 trap_other
     csrr    t0, mepc
     beqz    t0, trap_other
 
@@ -214,6 +214,11 @@ done_offset:
 
     # 重构 misaligned lw 数据：从 mtval 中加载连续 4 字节
     csrr    t5, mtval      # t5 = 故障访问地址
+    # 在此处加入有效地址检查，确保 mtval 合理
+    # 如果 mtval 地址不合法，直接跳转到 trap_other 进行终止处理
+    li      t6, 0x1000
+    blt     t5, t6, trap_other   # 如果 mtval 地址小于某个阈值，认为不合法（可根据实际内存布局调整）
+
     lbu     t6, 0(t5)      # 加载字节0
     addi    t0, t5, 1
     lbu     t1, 0(t0)      # 加载字节1
@@ -278,6 +283,7 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 # This code is taken from the default VRV system code. It prints out
