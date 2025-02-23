@@ -182,28 +182,26 @@ handle_misaligned_load:
     li      t3, 0x03     # 确保是 load 指令
     bne     t2, t3, trap_other
 
+    # 获取 funct3 确定 load 类型
     srai    t2, t1, 12
-    andi    t2, t2, 0x7  # 确保是 lw 指令
-    li      t3, 0x2
-    bne     t2, t3, trap_other
+    andi    t2, t2, 0x7  
 
-    # 计算 rd 目标寄存器
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other
-    li      t2, 2
-    beq     t4, t2, trap_other
-    li      t2, 1
-    beq     t4, t2, update_offset
-    addi    t2, t4, -2
-    slli    t2, t2, 2
-    j       done_offset
-update_offset:
-    li      t2, 0
-done_offset:
-    add     t2, sp, t2
-    mv      a7, t2
+    # 检查是否是 lw（0x2）、lb（0x0）、lh（0x1）、lbu（0x4）、lhu（0x5）
+    li      t3, 0x2  # lw
+    beq     t2, t3, fix_lw
+    li      t3, 0x0  # lb
+    beq     t2, t3, fix_lb
+    li      t3, 0x1  # lh
+    beq     t2, t3, fix_lh
+    li      t3, 0x4  # lbu
+    beq     t2, t3, fix_lbu
+    li      t3, 0x5  # lhu
+    beq     t2, t3, fix_lhu
 
+    j       trap_other  # 不是支持的 load 指令则终止
+
+fix_lw:
+    # 处理 misaligned lw
     csrr    t5, mtval
     lbu     t6, 0(t5)
     addi    t0, t5, 1
@@ -219,13 +217,78 @@ done_offset:
     or      t6, t6, t1
     or      t6, t6, t2
     or      t6, t6, t3
+    j       store_fixed_value
 
-    sw      t6, 0(a7)
+fix_lb:
+    csrr    t5, mtval
+    lbu     t6, 0(t5)
+    slli    t6, t6, 24
+    srai    t6, t6, 24  # 符号扩展
+    j       store_fixed_value
+
+fix_lbu:
+    csrr    t5, mtval
+    lbu     t6, 0(t5)
+    j       store_fixed_value
+
+fix_lh:
+    csrr    t5, mtval
+    lbu     t6, 0(t5)
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)
+    slli    t1, t1, 8
+    or      t6, t6, t1
+    slli    t6, t6, 16
+    srai    t6, t6, 16  # 符号扩展
+    j       store_fixed_value
+
+fix_lhu:
+    csrr    t5, mtval
+    lbu     t6, 0(t5)
+    addi    t0, t5, 1
+    lbu     t1, 0(t0)
+    slli    t1, t1, 8
+    or      t6, t6, t1
+    j       store_fixed_value
+
+store_fixed_value:
+    srai    t4, t1, 7
+    andi    t4, t4, 0x1F
+    beq     t4, zero, trap_other
+    li      t2, 2
+    beq     t4, t2, trap_other
+    li      t2, 1
+    beq     t4, t2, update_offset
+    addi    t2, t4, -2
+    slli    t2, t2, 2
+    j       done_offset
+
+update_offset:
+    li      t2, 0
+done_offset:
+    add     t2, sp, t2
+    sw      t6, 0(t2)
 
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
+    j       restore_registers
 
+trap_other:
+    li      a7, PRINT_STR
+    la      a0, __m_exc
+    ecall
+    csrr    a0, mcause
+    li      a7, PRINT_HEX
+    ecall
+    li      a0, NEWLN_CHR
+    li      a7, PRINT_CHR
+    ecall
+    li      a0, -1
+    li      a7, EXIT
+    ecall
+
+restore_registers:
     lw      zero, 0(sp)
     lw      ra,   4(sp)
     lw      gp,   8(sp)
@@ -258,14 +321,14 @@ done_offset:
     lw      t5, 116(sp)
     lw      t6, 120(sp)
     addi    sp, sp, 124
-
     csrrw   sp, mscratch, sp
     mret
 
-trap_other:
+    trap_other:
     addi    sp, sp, 124
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 
