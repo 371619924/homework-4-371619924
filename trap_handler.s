@@ -137,10 +137,14 @@ __mtrap:
 
     # 保存 x1..x31 到 [sp + 4*N]（x0 无需存）
     li      t0, 1
+
 save_registers:
-    sw      x\ t0, (t0-1) * 4(sp)
+    addi    t1, t0, -1       # t1 = t0 - 1
+    slli    t1, t1, 2        # t1 = (t0-1) * 4
+    sw      x1, t1(sp)       # 存储寄存器 x1..x31
     addi    t0, t0, 1
     bne     t0, 32, save_registers
+
 
     ################################################################################
     # 2. 判断是否是 mcause=4 => misaligned load address
