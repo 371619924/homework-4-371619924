@@ -186,7 +186,7 @@ __mtrap:
 
     # Check if the misaligned address is for an instruction fetch
     csrr t6, mepc       # Get current instruction address
-    andi t7, t6, 3      # Check if address is misaligned for instruction fetch
+    and t7, t6, 3       # Check if address is misaligned for instruction fetch
     bnez t7, terminate  # If misaligned, terminate
 
     # Load the two words that contain our data from the misaligned address
