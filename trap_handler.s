@@ -179,46 +179,42 @@ handle_load:
     beqz    t0, trap_other
 
     csrr    t5, mtval
-    li      t6, -4
-    and     t6, t5, t6
+    andi    t6, t5, -4        # 计算对齐的地址
+    lw      t1, 0(t6)         # 读取第一个 word
+    lw      t2, 4(t6)         # 读取下一个 word
 
-    lw      t1, 0(t6)
-    lw      t2, 4(t6)
+    andi    t3, t5, 0x3       # 计算 misaligned 偏移
+    slli    t3, t3, 3         # 偏移量 * 8
 
-    andi    t3, t5, 0x3
-    slli    t3, t3, 3
-    srl     t1, t1, t3
-
-    addi    t4, zero, 32  # VRV 不支持 li，改用 addi
-    sub     t3, t4, t3    # 计算剩余位数
-    sll     t2, t2, t3
-    or      t1, t1, t2
+    srl     t4, t1, t3        # 右移第一个 word
+    li      t7, 32
+    sub     t3, t7, t3
+    sll     t5, t2, t3        # 左移第二个 word
+    or      t4, t4, t5        # 组合最终值
 
     csrr    t0, mepc
-    lw      t4, 0(t0)
+    lw      t6, 0(t0)         # 取出指令
+    srli    t6, t6, 7         # 提取 rd（目标寄存器）
+    andi    t6, t6, 0x1F
+    beqz    t6, restore_regs  # 如果 rd=0，不存数据
 
-    srli    t4, t4, 7
-    andi    t4, t4, 0x1F
-    beqz    t4, restore_regs
-
-    li      t2, 1
-    beq     t4, t2, restore_regs
-    li      t2, 2
-    beq     t4, t2, set_offset
-    addi    t2, t4, -2
-    slli    t2, t2, 2
+    li      t3, 2
+    beq     t6, t3, set_offset
+    addi    t3, t6, -2
+    slli    t3, t3, 2
     j       done_offset
 set_offset:
-    li      t2, 0
+    li      t3, 0
 done_offset:
-    add     t2, sp, t2
-    sw      t1, 0(t2)
+    add     t3, sp, t3
+    sw      t4, 0(t3)         # 存入寄存器
 
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
 restore_regs:
+    # 恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -245,10 +241,10 @@ restore_regs:
     lw      s9,  92(sp)
     lw      s10, 96(sp)
     lw      s11,100(sp)
-    lw      t3, 104(sp)
-    lw      t4, 108(sp)
-    lw      t5, 112(sp)
-    lw      t6, 116(sp)
+    lw      t3,104(sp)
+    lw      t4,108(sp)
+    lw      t5,112(sp)
+    lw      t6,116(sp)
     addi    sp, sp, 120
 
     csrrw   sp, mscratch, sp
@@ -258,6 +254,7 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 
