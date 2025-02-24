@@ -174,7 +174,7 @@ __mtrap:
 
     # 读取 mepc 并解码指令
     csrr    t2, mepc      
-    lwu     t3, 0(t2)     
+    lw     t3, 0(t2)     
     li      t4, 0x00000003
     andi    t3, t3, 0x7F  
     bne     t3, t4, not_misaligned_load
@@ -199,7 +199,7 @@ misaligned_load_handler:
 
     # 解析 rd 并存入
     csrr    t5, mepc  
-    lwu     t6, 0(t5) 
+    lw     t6, 0(t5) 
     srli    t4, t6, 7  
     andi    t4, t4, 0x1F
     mv      x(t4), t3  
