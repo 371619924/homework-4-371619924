@@ -131,10 +131,8 @@ __mstart:
 	
   	
 __mtrap:
-    # Swap SP and mscratch to get the trap stack
+    # Save registers to preserve state
     csrrw sp, mscratch, sp
-
-    # Save all registers to preserve state (x0 - x31)
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
@@ -169,40 +167,47 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Check the cause of the trap (mcause)
+    # Check if it's a misaligned load or store
     csrr t0, mcause
-    li t1, 4                  # 0x4 is the code for misaligned load
-    bne t0, t1, terminate     # If not misaligned load, terminate
+    li t1, 4                  # Misaligned load (0x4)
+    li t2, 6                  # Misaligned store (0x6)
+    bne t0, t1, check_store   # If not misaligned load, check for misaligned store
+    bne t0, t2, terminate     # If not misaligned store, terminate
 
-    # Get the address of the misaligned load from mtval
-    csrr t0, mtval            # Load the misaligned address (mtval)
+check_store:
+    # Misaligned store handler
+    csrr t0, mtval            # Get the misaligned address
+    andi t1, t0, 0x3          # Check misalignment (offset)
+    andi t2, t0, 0xFFFFFFFC   # Get the aligned address
 
-    # Extract the misalignment offset (t0 holds the address)
-    andi t1, t0, 0x3          # Mask out the last 2 bits (misalignment offset)
+    # Store to two different addresses if misaligned
+    sw x5, 0(t2)              # Store first part (aligned address)
+    sw x6, 4(t2)              # Store second part (next word-aligned address)
+
+    # Handle misaligned load here (as done in the original example)
+    csrr t0, mtval            # Get the misaligned load address
+    andi t1, t0, 0x3          # Get the offset
     andi t2, t0, 0xFFFFFFFC   # Get the word-aligned base address
 
-    # Load the two aligned words that contain our data
-    lw t3, 0(t2)              # Load the first word
-    lw t4, 4(t2)              # Load the second word (next aligned word)
+    lw t3, 0(t2)              # Load first word
+    lw t4, 4(t2)              # Load second word
 
-    # Shift and combine the words based on the misalignment offset
-    slli t1, t1, 3            # Convert the byte offset into a bit offset (multiply by 8)
+    slli t1, t1, 3            # Convert byte offset to bit offset (multiply by 8)
     srl t3, t3, t1            # Shift the first word right by the offset
     li t1, 32                 # Number of bits in a word (32-bit)
     sub t1, t1, t1            # Calculate complementary shift for the second word
     sll t4, t4, t1            # Shift the second word left
     or t3, t3, t4             # Combine the two words into the final result
 
-    # Fetch the instruction to extract the destination register (rd)
+    # Store the result in the destination register (rd)
     csrr t1, mepc             # Get the program counter of the faulting instruction
     lw t2, 0(t1)              # Load the instruction
     srli t2, t2, 7            # Extract the rd (destination register)
     andi t2, t2, 0x1F         # Mask the register value to get the correct rd (5 bits)
 
-    # Store the result in the destination register
-    mv t2, t3          # Store the result into the destination register
+    mv t2, t3                 # Move the result into the destination register (t2)
 
-    # Restore all registers from the trap stack
+    # Restore registers from the trap stack
     lw x0, 0(sp)
     lw x1, 4(sp)
     lw x2, 8(sp)
@@ -236,7 +241,7 @@ __mtrap:
     lw x30, 120(sp)
     lw x31, 124(sp)
 
-    # Restore SP and execute the return from the trap
+    # Restore SP and return from the trap
     csrrw sp, mscratch, sp
     mret                     # Return from the trap
 
