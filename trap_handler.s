@@ -179,7 +179,9 @@ handle_load:
     beqz    t0, trap_other    # MEPC 为 0，无法修复
 
     csrr    t5, mtval         # 读取 MTVAL（故障地址）
-    andi    t6, t5, ~0x3      # 计算对齐的地址（向下取整）
+    li      t6, -4        # 0xFFFFFFFC，相当于 ~0x3
+    and     t6, t5, t6    # 计算对齐的地址（向下取整）
+      
     lw      t1, 0(t6)         # 加载对齐地址的数据
     lw      t2, 4(t6)         # 加载下一个对齐 word
 
@@ -241,11 +243,11 @@ restore_regs:
     lw      s8,  88(sp)
     lw      s9,  92(sp)
     lw      s10, 96(sp)
-    lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
+    lw      s11, 100(sp)
+    lw      t3,  104(sp)
+    lw      t4,  108(sp)
+    lw      t5,  112(sp)
+    lw      t6,  116(sp)
     addi    sp, sp, 120
 
     # 恢复用户 sp，并返回用户代码
