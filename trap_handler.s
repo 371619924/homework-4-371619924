@@ -182,31 +182,28 @@ __mtrap:
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address and offset
+    # Get misaligned address
     csrr t3, mtval            # Get misaligned address
-    andi t4, t3, 0x3          # Get offset within word (0-3)
 
-    # Calculate aligned addresses
-    andi t5, t3, -4           # Get aligned address by masking off bottom 2 bits
-    addi t6, t5, 4            # Get next aligned address
+    # Load consecutive bytes starting from misaligned address
+    lbu t4, 2(t3)             # Load third byte
+    lbu t5, 1(t3)             # Load second byte
+    lbu t6, 0(t3)             # Load first byte
+    lb a0, 3(t3)              # Load fourth byte with sign extension
 
-    # Load aligned words
-    lw a0, 0(t5)              # Load first aligned word
-    lw a1, 0(t6)              # Load second aligned word
-
-    # Adjust based on offset
-    li t1, 8                  # Bits per byte
-    mul t1, t4, t1            # Convert offset to bits
-    srl a0, a0, t1            # Shift right first word
-    li t1, 32                 # Total bits
-    sub t1, t1, t1            # Get remaining bits
-    sll a1, a1, t1            # Shift left second word
-    or a0, a0, a1             # Combine to get misaligned word
+    # Construct word in register
+    mv t1, t6                 # Start with first byte
+    slli t5, t5, 8            # Second byte position
+    slli t4, t4, 16           # Third byte position
+    slli a0, a0, 24           # Fourth byte position with sign
+    or t1, t1, t5             # Add second byte
+    or t1, t1, t4             # Add third byte
+    or t1, t1, a0             # Add fourth byte with sign
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw a0, 0(t2)              # Save result
+    sw t1, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -251,6 +248,9 @@ __mtrap:
 
     # Return from trap
     mret
+
+    
+    
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
