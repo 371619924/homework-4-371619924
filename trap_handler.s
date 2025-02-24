@@ -164,7 +164,9 @@ __mstart:
     # Check for misaligned load (exception code 4) in mcause
     csrr t0, mcause                   # Load mcause CSR
     li t1, 4                          # Misaligned load code
-    and t2, t0, 0x7F                  # Extract exception code (bits 6-0)
+    li t3, 0x7F                    # Load immediate 0x7F into t3
+    and t2, t0, t3                  # Extract exception code (bits 6-0)
+                
     bne t2, t1, terminate              # If it's not a misaligned load, terminate
 
     # Misaligned load: process the load as a series of 4 byte loads
