@@ -129,13 +129,13 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 __mtrap:
-    ################################################################################
-    # 1. 交换 sp 和 mscratch，让 trap handler 有独立的内核栈可用
-    ################################################################################
-    csrrw   sp, mscratch, sp  # sp 和 mscratch 互换
-    addi    sp, sp, -128      # 给 32 个寄存器预留 128 字节（32*4=128）
+################################################################################
+# 1. 交换 sp 和 mscratch，让 trap handler 有独立的内核栈可用
+################################################################################
+    csrrw   sp, mscratch, sp
+    addi    sp, sp, -128    # 32 个通用寄存器 x 4 字节 = 128
 
-    # 依次把 x0..x31 存入 [sp + 4*N] 中
+    # 保存所有寄存器 x0..x31 到 [sp + 4*N]
     sw x0,   0(sp)
     sw x1,   4(sp)
     sw x2,   8(sp)
@@ -169,75 +169,143 @@ __mtrap:
     sw x30,  120(sp)
     sw x31,  124(sp)
 
-    ################################################################################
-    # 2. 判断是否为 mcause=4 (misaligned load)，且指令是 lw
-    ################################################################################
+################################################################################
+# 2. 若 mcause=4 (Misaligned load address)，尝试解码指令
+################################################################################
     csrr    t0, mcause
-    li      t1, 4            # misaligned load 的 mcause 值
-    bne     t0, t1, not_misaligned_lw
+    li      t1, 4                # misaligned load 的值
+    bne     t0, t1, not_misaligned_load
 
-    # 2.1. 读出指令
-    csrr    t2, mepc         # t2 = mepc
-    lw      t3, 0(t2)        # t3 = 指令码(32位)
+    # 2.1 读取异常指令
+    csrr    t2, mepc             # t2 = mepc
+    lw      t3, 0(t2)            # t3 = 指令码(32 位)
 
-    # 检查 opcode (bits[6:0]) 是否等于 3 (LOAD)
-    li      t4, 0x7F         # 用于屏蔽低 7 位
-    and     t4, t3, t4       # t4 = 指令的 opcode
-    li      t5, 3            # load opcode
-    bne     t4, t5, not_misaligned_lw
+    # 2.2 检查 opcode (bits[6:0]) 是否等于 3 (LOAD)
+    li      t4, 0x7F             # 遮罩低 7 位
+    and     t4, t3, t4           # t4 = opcode
+    li      t5, 3                # opcode =3 => Load
+    bne     t4, t5, not_misaligned_load
 
-    # 检查 funct3 (bits[14:12]) 是否等于 2 -> lw
-    srli    t6, t3, 12       # 移除低 12 位
-    li      t5, 7            # 用于与运算保留 bits[2:0]
-    and     t6, t6, t5       # t6 = funct3
-    li      t5, 2            # funct3 = 2 表示 lw
-    bne     t6, t5, not_misaligned_lw
+    # 2.3 取出 funct3 (bits[14:12])，判断具体哪种 load
+    srli    t6, t3, 12           # 移除低 12 位
+    li      t5, 7
+    and     t6, t6, t5           # t6 = funct3
 
-    # 到这里证明它是 lw 指令 + misaligned load
-    # 2.2. 解析 rd = bits[11:7]
+    # 分别处理 lw(2), lh(1), lhu(5); 其它类型不处理 => terminate
+    li      t5, 2
+    beq     t6, t5, do_misaligned_lw
+
+    li      t5, 1
+    beq     t6, t5, do_misaligned_lh
+
+    li      t5, 5
+    beq     t6, t5, do_misaligned_lhu
+
+    j       not_misaligned_load  # 其它 load 类型 => 不处理
+
+################################################################################
+# 2A. 处理 misaligned lw
+################################################################################
+do_misaligned_lw:
+    # 解析 rd (bits[11:7])
     srli    t4, t3, 7
     li      t5, 0x1F
     and     t4, t4, t5       # t4 = rd
 
-    # 2.3. 从 mtval 取出导致异常的地址
+    # 读取 mtval => 发生异常的目标地址
     csrr    a1, mtval
 
-    # 2.4. 拼装 4 个字节 (小端序: 低地址字节放结果最低位)
-    # a2 存放最终 32 位数据, t5 做临时
-    lbu     a2, 0(a1)        # byte0
-    lbu     t5, 1(a1)        # byte1
+    # 连续读 4 字节合并（小端序）
+    lbu     a2, 0(a1)
+    lbu     t5, 1(a1)
     slli    t5, t5, 8
     or      a2, a2, t5
 
-    lbu     t5, 2(a1)        # byte2
+    lbu     t5, 2(a1)
     slli    t5, t5, 16
     or      a2, a2, t5
 
-    lbu     t5, 3(a1)        # byte3
+    lbu     t5, 3(a1)
     slli    t5, t5, 24
     or      a2, a2, t5
 
-    # 2.5. 把 a2 写回到保存的栈区对应的 rd
-    # 每个寄存器占 4 字节, 偏移= rd*4
+    # 写回到 rd 对应的保存区
     slli    t5, t4, 2
     add     t5, t5, sp
     sw      a2, 0(t5)
 
-    # 2.6. 指令成功修正, 前进 mepc 到下一条
+    # mepc += 4，跳过已修复指令
     csrr    t6, mepc
     addi    t6, t6, 4
     csrw    mepc, t6
-
-    # 跳去恢复现场并返回
     j       restore_all
 
-not_misaligned_lw:
-    # 不是 misaligned lw, 交给默认终止
-    j       terminate
+################################################################################
+# 2B. 处理 misaligned lh => 2 字节读 => sign-extend
+################################################################################
+do_misaligned_lh:
+    srli    t4, t3, 7
+    li      t5, 0x1F
+    and     t4, t4, t5       # t4 = rd
 
-    ################################################################################
-    # 3. 恢复所有寄存器并返回
-    ################################################################################
+    csrr    a1, mtval        # 读取 misaligned 地址
+
+    # 读 2 字节 (小端序)，并 SIGN-EXTEND
+    lbu     a2, 0(a1)        # 低字节
+    lbu     t5, 1(a1)        # 高字节
+    slli    t5, t5, 8
+    or      a2, a2, t5
+
+    # a2 现存储了 16 位无符号值 => 对 lh 需符号扩展
+    slli    a2, a2, 16       # 把 16 位数据左移到高半部分
+    srai    a2, a2, 16       # 再算术右移 16 => 符号扩展
+
+    # 写回 rd 对应位置
+    slli    t5, t4, 2
+    add     t5, t5, sp
+    sw      a2, 0(t5)
+
+    # 前进 mepc 并返回
+    csrr    t6, mepc
+    addi    t6, t6, 4
+    csrw    mepc, t6
+    j       restore_all
+
+################################################################################
+# 2C. 处理 misaligned lhu => 2 字节读 => zero-extend
+################################################################################
+do_misaligned_lhu:
+    srli    t4, t3, 7
+    li      t5, 0x1F
+    and     t4, t4, t5       # t4 = rd
+
+    csrr    a1, mtval
+
+    # 读 2 字节 (小端序)，zero-extend
+    lbu     a2, 0(a1)        # 低字节
+    lbu     t5, 1(a1)        # 高字节
+    slli    t5, t5, 8
+    or      a2, a2, t5
+    # zero-extend 就直接保持 a2 的低 16 位即可，无需符号扩展
+
+    slli    t5, t4, 2
+    add     t5, t5, sp
+    sw      a2, 0(t5)
+
+    csrr    t6, mepc
+    addi    t6, t6, 4
+    csrw    mepc, t6
+    j       restore_all
+
+################################################################################
+# 其它情况 => 不处理，默认 terminate
+################################################################################
+not_misaligned_load:
+    j terminate
+
+################################################################################
+# 3. 恢复所有寄存器并返回
+################################################################################
 restore_all:
     lw x0,   0(sp)
     lw x1,   4(sp)
@@ -275,7 +343,6 @@ restore_all:
     addi sp, sp, 128
     csrrw   sp, mscratch, sp  # 恢复原先的 sp
     mret
-
 
 
 
