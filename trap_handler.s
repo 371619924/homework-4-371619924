@@ -130,6 +130,7 @@ __mstart:
 
 	
   	
+
 __mtrap:
     # Swap SP and mscratch to get trap stack
     csrrw sp, mscratch, sp 
@@ -138,7 +139,6 @@ __mtrap:
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
-    # sp (x2) is saved elsewhere
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -174,40 +174,36 @@ __mtrap:
     li t1, 4                  # Load misaligned code
     bne t0, t1, terminate     # If not misaligned load, terminate
 
-    # Get faulting instruction
+    # Get faulting instruction and extract destination register
     csrr t0, mepc             # Get instruction pointer
     lw t1, 0(t0)              # Get instruction
-    
-    # Extract destination register (rd) field 
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address
+    # Get misaligned address and verify instruction
     csrr t3, mtval            # Get misaligned address
+    andi t4, t1, 0x7f         # Extract opcode
+    li t5, 0x03               # lw opcode
+    bne t4, t5, terminate     # If not lw, terminate
 
-    # Get word-aligned addresses
-    andi t4, t3, 0x3          # Get misalignment offset
-    andi t5, t3, -4           # Get aligned address
-    addi t6, t5, 4            # Get next aligned address
+    # Load bytes in the correct order for word reconstruction
+    lbu t4, 0(t3)             # Load lowest byte
+    lbu t5, 1(t3)             # Load second byte
+    lbu t6, 2(t3)             # Load third byte
+    lb a0, 3(t3)              # Load highest byte with sign extension
 
-    # Load both aligned words
-    lw a0, 0(t5)              # Load first word
-    lw a1, 0(t6)              # Load second word
-
-    # Calculate shifts based on misalignment
-    slli t4, t4, 3            # Convert offset to bits (multiply by 8)
-    
-    # Get correct bytes from the aligned loads
-    srl a0, a0, t4            # Right shift first word
-    li t1, 32                 # Total bits in word
-    sub t1, t1, t4            # Get number of bits to shift left
-    sll a1, a1, t1            # Left shift second word
-    or a0, a0, a1             # Combine to get final word
+    # Construct word in proper order
+    slli t5, t5, 8            # Position second byte
+    slli t6, t6, 16           # Position third byte
+    slli a0, a0, 24           # Position highest byte with sign
+    or t4, t4, t5             # Combine first and second bytes
+    or t4, t4, t6             # Add third byte
+    or t4, t4, a0             # Add highest byte with sign
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw a0, 0(t2)              # Save result
+    sw t4, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -253,6 +249,7 @@ __mtrap:
     # Return from trap
     mret
 
+    
     
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
