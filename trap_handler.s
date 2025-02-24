@@ -130,121 +130,150 @@ __mstart:
 
 	
   	
-    .globl __mtrap
 __mtrap:
-    csrrw   sp, mscratch, sp
-    addi    sp, sp, -120
-    sw      ra,   0(sp)
-    sw      gp,   4(sp)
-    sw      tp,   8(sp)
-    sw      t0,  12(sp)
-    sw      t1,  16(sp)
-    sw      t2,  20(sp)
-    sw      s0,  24(sp)
-    sw      s1,  28(sp)
-    sw      a0,  32(sp)
-    sw      a1,  36(sp)
-    sw      a2,  40(sp)
-    sw      a3,  44(sp)
-    sw      a4,  48(sp)
-    sw      a5,  52(sp)
-    sw      a6,  56(sp)
-    sw      a7,  60(sp)
-    sw      s2,  64(sp)
-    sw      s3,  68(sp)
-    sw      s4,  72(sp)
-    sw      s5,  76(sp)
-    sw      s6,  80(sp)
-    sw      s7,  84(sp)
-    sw      s8,  88(sp)
-    sw      s9,  92(sp)
-    sw      s10, 96(sp)
-    sw      s11,100(sp)
-    sw      t3,104(sp)
-    sw      t4,108(sp)
-    sw      t5,112(sp)
-    sw      t6,116(sp)
+    # --- 交换 sp 和 mscratch，使用内核栈 ---
+    csrr    t8, mscratch      # t8 = 内核栈指针
+    csrw    mscratch, sp      # mscratch = 原始 sp
+    mv      sp, t8            # sp 现在指向内核栈
 
-    csrr    t0, mcause
-    li      t1, 4
-    bne     t0, t1, trap_other
+    # --- 预留空间并保存所有寄存器 ---
+    addi    sp, sp, -128
+    sw      x0,   0(sp)
+    sw      ra,   4(sp)
+    sw      sp,   8(sp)
+    sw      gp,  12(sp)
+    sw      tp,  16(sp)
+    sw      t0,  20(sp)
+    sw      t1,  24(sp)
+    sw      t2,  28(sp)
+    sw      s0,  32(sp)
+    sw      s1,  36(sp)
+    sw      a0,  40(sp)
+    sw      a1,  44(sp)
+    sw      a2,  48(sp)
+    sw      a3,  52(sp)
+    sw      a4,  56(sp)
+    sw      a5,  60(sp)
+    sw      a6,  64(sp)
+    sw      a7,  68(sp)
+    sw      s2,  72(sp)
+    sw      s3,  76(sp)
+    sw      s4,  80(sp)
+    sw      s5,  84(sp)
+    sw      s6,  88(sp)
+    sw      s7,  92(sp)
+    sw      s8,  96(sp)
+    sw      s9, 100(sp)
+    sw      s10,104(sp)
+    sw      s11,108(sp)
+    sw      t3, 112(sp)
+    sw      t4, 116(sp)
+    sw      t5, 120(sp)
+    sw      t6, 124(sp)
 
-    csrr    t0, mepc
-    lw      t1, 0(t0)
-    andi    t2, t1, 0x7F
-    li      t3, 0x03
-    bne     t2, t3, trap_other
-    srai    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 0x2
-    bne     t2, t3, trap_other
+    # --- 读取 mcause 检查异常类型 ---
+    csrr    t0, mcause        # t0 = mcause
+    li      t1, 0x7FFFFFFF    # 清除最高位 (Interrupt bit)
+    and     t0, t0, t1        # t0 现在只包含异常代码
+    li      t1, 4             # Misaligned Load Exception (4)
+    bne     t0, t1, call_terminate  # 不是 misaligned load？终止
 
-    srai    t4, t1, 7
-    andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other    # Skip x0
-    li      t2, 1
-    beq     t4, t2, trap_other      # Skip x1 (ra)
-    li      t2, 2
-    beq     t4, t2, trap_other      # Skip x2 (sp)
-    addi    t2, t4, -2
-    slli    t2, t2, 2
-    add     t2, sp, t2
+    # --- 读取 mepc 处的指令 ---
+    csrr    t2, mepc          # t2 = 触发异常的指令地址
+    lw      t3, 0(t2)         # t3 = 取指令
 
-    csrr    t5, mtval
-    lbu     t6, 0(t5)
-    lbu     t1, 1(t5)
-    lbu     t2, 2(t5)
-    lbu     t3, 3(t5)
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t6, t6, t1
-    or      t6, t6, t2
-    or      t6, t6, t3
-    sw      t6, 0(t2)
+    # --- 确保是 lw 指令 ---
+    andi    t4, t3, 0x7F      # 提取 opcode (bits [6:0])
+    li      t5, 0x03
+    bne     t4, t5, call_terminate  # 不是 load 指令？终止
 
+    srli    t4, t3, 12
+    andi    t4, t4, 0x7       # 提取 funct3 (bits [14:12])
+    li      t5, 2             # lw 的 funct3 = 2
+    bne     t4, t5, call_terminate  # 不是 lw？终止
+
+    # --- 获取 rd (目的寄存器) ---
+    srli    t4, t3, 7
+    andi    t4, t4, 0x1F      # t4 = 目的寄存器 rd
+
+    # --- 读取 misaligned 地址 ---
+    csrr    t6, mtval         # t6 = 访问的 misaligned 地址
+
+    # --- 逐字节加载并拼接 ---
+    lbu     t7, 0(t6)         # 低字节
+    lbu     t8, 1(t6)         # 次低字节
+    lbu     t9, 2(t6)         # 次高字节
+    lbu     t0, 3(t6)         # 高字节
+
+    slli    t0, t0, 24
+    slli    t9, t9, 16
+    slli    t8, t8, 8
+    or      t7, t7, t8
+    or      t7, t7, t9
+    or      t7, t7, t0        # t7 现在包含完整的 32 位值
+
+    # --- 更新目的寄存器的值 ---
+    li      t5, 0
+    beq     t4, t5, misaligned_done  # rd == x0？跳过
+    li      t5, 2
+    beq     t4, t5, misaligned_done  # rd == x2 (sp)？跳过
+
+    # 计算 rd 在保存区的偏移量
+    addi    t5, t4, -1
+    slli    t5, t5, 2         # 偏移量 = (rd-1) * 4
+    add     t5, sp, t5
+    sw      t7, 0(t5)         # 写回保存的寄存器
+
+misaligned_done:
+    # --- 跳过 lw 指令 ---
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    lw      ra,   0(sp)
-    lw      gp,   4(sp)
-    lw      tp,   8(sp)
-    lw      t0,  12(sp)
-    lw      t1,  16(sp)
-    lw      t2,  20(sp)
-    lw      s0,  24(sp)
-    lw      s1,  28(sp)
-    lw      a0,  32(sp)
-    lw      a1,  36(sp)
-    lw      a2,  40(sp)
-    lw      a3,  44(sp)
-    lw      a4,  48(sp)
-    lw      a5,  52(sp)
-    lw      a6,  56(sp)
-    lw      a7,  60(sp)
-    lw      s2,  64(sp)
-    lw      s3,  68(sp)
-    lw      s4,  72(sp)
-    lw      s5,  76(sp)
-    lw      s6,  80(sp)
-    lw      s7,  84(sp)
-    lw      s8,  88(sp)
-    lw      s9,  92(sp)
-    lw      s10, 96(sp)
-    lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    mret
+    # --- 恢复所有寄存器 ---
+    lw      t6, 124(sp)
+    lw      t5, 120(sp)
+    lw      t4, 116(sp)
+    lw      t3, 112(sp)
+    lw      s11,108(sp)
+    lw      s10,104(sp)
+    lw      s9, 100(sp)
+    lw      s8, 96(sp)
+    lw      s7, 92(sp)
+    lw      s6, 88(sp)
+    lw      s5, 84(sp)
+    lw      s4, 80(sp)
+    lw      s3, 76(sp)
+    lw      s2, 72(sp)
+    lw      a7, 68(sp)
+    lw      a6, 64(sp)
+    lw      a5, 60(sp)
+    lw      a4, 56(sp)
+    lw      a3, 52(sp)
+    lw      a2, 48(sp)
+    lw      a1, 44(sp)
+    lw      a0, 40(sp)
+    lw      s1, 36(sp)
+    lw      s0, 32(sp)
+    lw      t2, 28(sp)
+    lw      t1, 24(sp)
+    lw      t0, 20(sp)
+    lw      tp, 16(sp)
+    lw      gp, 12(sp)
+    lw      sp,  8(sp)
+    lw      ra,  4(sp)
+    lw      x0,  0(sp)
+    addi    sp, sp, 128
 
-trap_other:
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
+    csrr    t8, mscratch
+    csrw    mscratch, sp
+    mv      sp, t8
+
+    mret                    # 返回用户态
+
+call_terminate:
     j       terminate
+
 
 
 # This code is taken from the default VRV system code. It prints out
