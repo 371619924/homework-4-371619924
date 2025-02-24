@@ -185,20 +185,24 @@ __mtrap:
     # Get misaligned address
     csrr t3, mtval            # Get misaligned address
 
-    # Load consecutive bytes starting from misaligned address
-    lbu t4, 3(t3)             # Load highest byte
-    lbu t5, 2(t3)             # Load second-highest byte
-    lbu t6, 1(t3)             # Load second-lowest byte
-    lb t1, 0(t3)              # Load lowest byte with sign extension
+    # Get word-aligned addresses
+    andi t4, t3, 0x3          # Get misalignment offset
+    andi t5, t3, -4           # Get aligned address
+    addi t6, t5, 4            # Get next aligned address
 
-    # Construct word in register
-    mv a0, t1                 # Start with lowest byte
-    slli t6, t6, 8            # Shift second-lowest byte
-    slli t5, t5, 16           # Shift second-highest byte
-    slli t4, t4, 24           # Shift highest byte
-    or a0, a0, t6             # Add second-lowest byte
-    or a0, a0, t5             # Add second-highest byte
-    or a0, a0, t4             # Add highest byte
+    # Load both aligned words
+    lw a0, 0(t5)              # Load first word
+    lw a1, 0(t6)              # Load second word
+
+    # Calculate shifts based on misalignment
+    slli t4, t4, 3            # Convert offset to bits (multiply by 8)
+    
+    # Get correct bytes from the aligned loads
+    srl a0, a0, t4            # Right shift first word
+    li t1, 32                 # Total bits in word
+    sub t1, t1, t4            # Get number of bits to shift left
+    sll a1, a1, t1            # Left shift second word
+    or a0, a0, a1             # Combine to get final word
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
@@ -248,7 +252,6 @@ __mtrap:
 
     # Return from trap
     mret
-
 
     
 # This code is taken from the default VRV system code. It prints out
