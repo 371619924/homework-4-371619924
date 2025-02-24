@@ -136,6 +136,7 @@ __mtrap:
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
+    sw x2, 8(sp)  # Save sp (x2)
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -171,45 +172,42 @@ __mtrap:
     li t1, 4          # Load misaligned code
     bne t0, t1, terminate    # If not misaligned load, terminate
 
-    # Get faulting instruction address (mepc)
-    csrr t0, mepc      # Get instruction pointer (mepc)
-    lw t1, 0(t0)       # Get the instruction at mepc
+    # Get faulting instruction
+    csrr t0, mepc      # Get instruction pointer
+    lw t1, 0(t0)        # Get instruction
 
-    # Extract destination register (rd) from instruction
-    srli t2, t1, 7      # Shift right to get rd field
-    andi t2, t2, 0x1f   # Mask to get 5 bits (rd)
+    # Extract destination register
+    srli t2, t1, 7      # Shift right to get rd
+    andi t2, t2, 0x1f    # Mask to get 5 bits
 
-    # Get misaligned address from mtval
-    csrr t3, mtval      # Get misaligned address from mtval
-    andi t4, t3, 3      # Get offset within the word (3 bits)
-    andi t5, t3, -4     # Get word-aligned address
+    # Get misaligned address and word-aligned addresses
+    csrr t3, mtval      # Get misaligned address
+    andi t4, t3, 0x3     # Get offset within word (0-3)
+    andi t5, t3, -4      # Get word-aligned address (clear bottom 2 bits)
 
-    # Check if the misaligned address is for an instruction fetch
-    csrr t6, mepc       # Get current instruction address
-    and t7, t6, 3       # Check if address is misaligned for instruction fetch
-    bnez t7, terminate  # If misaligned, terminate
+    # Load both aligned words that contain our data
+    lw t6, 0(t5)        # Load first word
+    lw a0, 4(t5)        # Load next word
 
-    # Load the two words that contain our data from the misaligned address
-    lw t6, 0(t5)        # Load first word from aligned address
-    lw a0, 4(t5)        # Load second word (next word) if necessary
-
-    # Shift and combine the two words to form the correct data
+    # Calculate number of bits to shift based on offset
     slli t4, t4, 3      # Convert byte offset to bits (multiply by 8)
-    srl t6, t6, t4      # Right shift the first word by offset
-    li t1, 32           # Bits in a word
-    sub t1, t1, t4      # Complementary shift
-    sll a0, a0, t1      # Left shift the second word
-    or t6, t6, a0       # Combine both words to recover original data
 
-    # Save the result back to the destination register
-    slli t2, t2, 2      # Multiply rd by 4 for word offset
-    add t2, sp, t2      # Get stack location for destination register
-    sw t6, 0(t2)        # Store the result in the correct register
+    # Extract bytes from the aligned words
+    srl t6, t6, t4      # Right shift first word by offset
+    li t1, 32           # Bits in a word
+    sub t1, t1, t4      # Calculate complementary shift
+    sll a0, a0, t1      # Left shift second word
+    or t6, t6, a0        # Combine the parts to get our value
+
+    # Store the result in the original destination register location
+    slli t2, t2, 2      # Multiply rd by 4 for offset
+    add t2, sp, t2      # Get stack location
+    sw t6, 0(t2)        # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
-    addi t0, t0, 4      # Move to next instruction
-    csrw mepc, t0       # Set the new mepc
+    addi t0, t0, 4
+    csrw mepc, t0
 
     # Restore all registers
     lw x1, 4(sp)
@@ -244,13 +242,11 @@ __mtrap:
     lw x31, 124(sp)
     addi sp, sp, 128
 
-    # Restore stack pointer
+    # Restore original stack pointer
     csrrw sp, mscratch, sp
 
     # Return from trap
     mret
-
-
 
 
 
