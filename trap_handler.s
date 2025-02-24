@@ -128,115 +128,126 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
-	
-  	
-.globl __mtrap
 __mtrap:
-    # 交换 sp 与 mscratch，进入内核栈
+    ########################################################################
+    # 1. 切换到内核栈 (mscratch) 并保存所有 32 个通用寄存器
+    ########################################################################
+    # 1a) 交换 sp 与 mscratch，使 sp 指向内核栈顶
     csrrw   sp, mscratch, sp
-    # 分配 128 字节空间保存 x0～x31（每个寄存器 4 字节）
-    addi    sp, sp, -128
-    sw      x0,   0(sp)
-    sw      x1,   4(sp)
-    sw      x2,   8(sp)
-    sw      x3,   12(sp)
-    sw      x4,   16(sp)
-    sw      x5,   20(sp)
-    sw      x6,   24(sp)
-    sw      x7,   28(sp)
-    sw      x8,   32(sp)
-    sw      x9,   36(sp)
-    sw      x10,  40(sp)
-    sw      x11,  44(sp)
-    sw      x12,  48(sp)
-    sw      x13,  52(sp)
-    sw      x14,  56(sp)
-    sw      x15,  60(sp)
-    sw      x16,  64(sp)
-    sw      x17,  68(sp)
-    sw      x18,  72(sp)
-    sw      x19,  76(sp)
-    sw      x20,  80(sp)
-    sw      x21,  84(sp)
-    sw      x22,  88(sp)
-    sw      x23,  92(sp)
-    sw      x24,  96(sp)
-    sw      x25,  100(sp)
-    sw      x26,  104(sp)
-    sw      x27,  108(sp)
-    sw      x28,  112(sp)
-    sw      x29,  116(sp)
-    sw      x30,  120(sp)
-    sw      x31,  124(sp)
 
-    # 检查 mcause：若为 4（misaligned load）或 5（load access fault），则处理
+    # 1b) 在内核栈上开辟 128 字节空间，用于保存 x0..x31
+    addi    sp, sp, -128
+
+    # 1c) 依次将 x0..x31 保存在栈中，每个寄存器占 4 字节
+    #     约定: xN 存放在 [sp + 4*N] 中。
+    sw      x0,   0(sp)    # x0  --恒为0，存不存都可以
+    sw      x1,   4(sp)    # x1 (ra)
+    sw      x2,   8(sp)    # x2 (sp)
+    sw      x3,   12(sp)   # x3 (gp)
+    sw      x4,   16(sp)   # x4 (tp)
+    sw      x5,   20(sp)   # x5 (t0)
+    sw      x6,   24(sp)   # x6 (t1)
+    sw      x7,   28(sp)   # x7 (t2)
+    sw      x8,   32(sp)   # x8 (s0 / fp)
+    sw      x9,   36(sp)   # x9 (s1)
+    sw      x10,  40(sp)   # a0
+    sw      x11,  44(sp)   # a1
+    sw      x12,  48(sp)   # a2
+    sw      x13,  52(sp)   # a3
+    sw      x14,  56(sp)   # a4
+    sw      x15,  60(sp)   # a5
+    sw      x16,  64(sp)   # a6
+    sw      x17,  68(sp)   # a7
+    sw      x18,  72(sp)   # s2
+    sw      x19,  76(sp)   # s3
+    sw      x20,  80(sp)   # s4
+    sw      x21,  84(sp)   # s5
+    sw      x22,  88(sp)   # s6
+    sw      x23,  92(sp)   # s7
+    sw      x24,  96(sp)   # s8
+    sw      x25,  100(sp)  # s9
+    sw      x26,  104(sp)  # s10
+    sw      x27,  108(sp)  # s11
+    sw      x28,  112(sp)  # t3
+    sw      x29,  116(sp)  # t4
+    sw      x30,  120(sp)  # t5
+    sw      x31,  124(sp)  # t6
+
+    ########################################################################
+    # 2. 检查是否为“misaligned load address”，并且指令是否是 lw
+    ########################################################################
+    # 2a) 读取 mcause，若 != 4 (misaligned load), 则跳转 terminate
     csrr    t0, mcause
     li      t1, 4
-    beq     t0, t1, misaligned
-    li      t1, 5
-    beq     t0, t1, misaligned
-    j       trap_other
+    bne     t0, t1, not_misaligned_lw
 
-misaligned:
-    # 获取触发异常的指令地址
-    csrr    t0, mepc
-    beqz    t0, trap_other      # 若 mepc 为 0，则无法补丁
-    lw      t1, 0(t0)           # 取故障指令
+    # 2b) 读取 mepc，取出所触发异常的指令
+    csrr    t1, mepc        # t1 = mepc
+    lw      t2, 0(t1)       # t2 = *mepc (取 32 位指令)
 
-    # 检查 opcode（位 [6:0]）是否为 0x03（load 指令）
-    andi    t2, t1, 0x7F
-    li      t3, 0x03
-    bne     t2, t3, trap_other
+    # 2c) 检查 opcode（低 7 位）是否是 3 (load)，并且 funct3（位14..12）是否是 2 (lw)
+    #     opcode = t2[6:0]   => (t2 & 0x7F)
+    #     funct3 = t2[14:12] => ((t2 >> 12) & 0x7)
+    li      t3, 0x7F
+    and     t4, t2, t3      # t4 = 指令的最低7位
+    li      t5, 3           # opcode for loads
+    bne     t4, t5, not_misaligned_lw
 
-    # 提取 funct3（位 [14:12]），用 srli（逻辑右移，不扩展符号）
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 2             # lw 的 funct3 应为 2
-    bne     t2, t3, trap_other
+    srli    t4, t2, 12      # 取出 bits[14..12]
+    li      t5, 7
+    and     t4, t4, t5      # t4 = funct3
+    li      t6, 2           # funct3 = 2 -> lw
+    bne     t4, t6, not_misaligned_lw
 
-    # 提取目标寄存器号 rd（位 [11:7]）
-    srli    t4, t1, 7
-    andi    t4, t4, 0x1F
-    # 如果 rd 为 0（x0），补丁无意义，直接跳过补丁
-    beq     t4, zero, skip_patch
+    ########################################################################
+    # 3. 若确认为 misaligned lw，则从 mtval 取地址，拼装加载 4 个字节
+    ########################################################################
+    # 3a) 提取目的寄存器 rd (bits [11..7])，用于后面把结果写到相应栈区
+    #     rd = (instruction >> 7) & 0x1F
+    srli    t4, t2, 7
+    li      t5, 0x1F
+    and     t4, t4, t5      # t4 = rd
 
-    # 计算目标寄存器在 trap frame 中的保存地址：地址 = sp + (rd * 4)
-    slli    t5, t4, 2         # t5 = rd * 4
-    add     t5, sp, t5        # t5 指向保存该寄存器的槽
+    # 3b) 读取 mtval，得到真正访问的地址
+    csrr    a1, mtval       # a1 = 触发 misaligned load 的地址
 
-    # 从 mtval 中取出故障访问地址
-    csrr    t6, mtval
-    # 可选：检查 mtval 是否合理（例如小于某阈值视为非法）
-    li      t7, 0x1000
-    blt     t6, t7, trap_other
+    # 3c) 依次加载 4 个字节，并拼成 32 位
+    #     a2 中最终放置完整 32 位数据
+    lbu     a2, 0(a1)       # 第1字节(最低8位)
+    lbu     t5, 1(a1)
+    slli    a2, a2, 8
+    or      a2, a2, t5
 
-    # 用 lbu 连续加载 4 个字节，按小端顺序重构 32 位字
-    lbu     t0, 0(t6)         # byte0
-    addi    t1, t6, 1
-    lbu     t1, 0(t1)         # byte1
-    addi    t2, t6, 2
-    lbu     t2, 0(t2)         # byte2
-    addi    t3, t6, 3
-    lbu     t3, 0(t3)         # byte3
+    lbu     t5, 2(a1)
+    slli    a2, a2, 8
+    or      a2, a2, t5
 
-    slli    t1, t1, 8         # byte1 << 8
-    or      t0, t0, t1
-    slli    t2, t2, 16        # byte2 << 16
-    or      t0, t0, t2
-    slli    t3, t3, 24        # byte3 << 24
-    or      t0, t0, t3
+    lbu     t5, 3(a1)
+    slli    a2, a2, 8
+    or      a2, a2, t5
 
-    # 将重构的 32 位数据写入保存目标寄存器的 trap frame 槽
-    sw      t0, 0(t5)
+    # 3d) 将结果存入被保存的“rd”对应的栈位置(每个寄存器在栈的偏移 = 4*rd)
+    slli    t5, t4, 2       # t5 = 4*rd
+    add     t5, t5, sp
+    sw      a2, 0(t5)
 
-skip_patch:
-    # 更新 mepc，跳过 faulting 指令（lw 指令占 4 字节）
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
+    # 3e) mepc += 4，让下一条指令继续执行
+    csrr    t6, mepc
+    addi    t6, t6, 4
+    csrw    mepc, t6
 
-    # 恢复 x0～x31 寄存器
-    lw      x0,   0(sp)
+    # 若成功处理，后续继续恢复寄存器并返回
+    j       restore_all
+
+not_misaligned_lw:
+    # 若既不是 misaligned load，或指令不是 lw，走默认 terminate
+    j       terminate
+
+    ########################################################################
+    # 4. 恢复所有寄存器，并 mret 返回到原先的程序
+    ########################################################################
+restore_all:
+    lw      x0,   0(sp)     # x0 (无实际意义)
     lw      x1,   4(sp)
     lw      x2,   8(sp)
     lw      x3,   12(sp)
@@ -268,17 +279,17 @@ skip_patch:
     lw      x29,  116(sp)
     lw      x30,  120(sp)
     lw      x31,  124(sp)
+
     addi    sp, sp, 128
 
-    # 恢复用户 sp，再返回用户代码
+    # 恢复原来的用户栈指针
     csrrw   sp, mscratch, sp
+
+    # 返回到异常/中断前现场，继续执行
     mret
 
-trap_other:
-    addi    sp, sp, 128
-    csrrw   sp, mscratch, sp
-    j       terminate
-
+	
+  	
 
 
 # This code is taken from the default VRV system code. It prints out
