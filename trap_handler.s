@@ -186,24 +186,24 @@ __mtrap:
     csrr t3, mtval            # Get misaligned address
 
     # Load consecutive bytes starting from misaligned address
-    lbu t4, 2(t3)             # Load third byte
-    lbu t5, 1(t3)             # Load second byte
-    lbu t6, 0(t3)             # Load first byte
-    lb a0, 3(t3)              # Load fourth byte with sign extension
+    lbu t4, 3(t3)             # Load highest byte
+    lbu t5, 2(t3)             # Load second-highest byte
+    lbu t6, 1(t3)             # Load second-lowest byte
+    lb t1, 0(t3)              # Load lowest byte with sign extension
 
     # Construct word in register
-    mv t1, t6                 # Start with first byte
-    slli t5, t5, 8            # Second byte position
-    slli t4, t4, 16           # Third byte position
-    slli a0, a0, 24           # Fourth byte position with sign
-    or t1, t1, t5             # Add second byte
-    or t1, t1, t4             # Add third byte
-    or t1, t1, a0             # Add fourth byte with sign
+    mv a0, t1                 # Start with lowest byte
+    slli t6, t6, 8            # Shift second-lowest byte
+    slli t5, t5, 16           # Shift second-highest byte
+    slli t4, t4, 24           # Shift highest byte
+    or a0, a0, t6             # Add second-lowest byte
+    or a0, a0, t5             # Add second-highest byte
+    or a0, a0, t4             # Add highest byte
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw t1, 0(t2)              # Save result
+    sw a0, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -249,7 +249,7 @@ __mtrap:
     # Return from trap
     mret
 
-    
+
     
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
