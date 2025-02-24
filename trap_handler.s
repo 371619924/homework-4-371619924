@@ -190,13 +190,13 @@ handle_load:
     bne     t2, t3, trap_other
 
     # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
-    srai    t2, t1, 12
+    srl     t2, t1, 12         # 修改：使用逻辑右移提取字段
     andi    t2, t2, 0x7
     li      t3, 0x2
     bne     t2, t3, trap_other
 
     # 提取目标寄存器号 rd（位 11:7）
-    srai    t4, t1, 7
+    srl     t4, t1, 7          # 修改：使用逻辑右移提取字段
     andi    t4, t4, 0x1F
     beq     t4, zero, trap_other       # 若 rd 为 0，不补丁
     li      t2, 2
