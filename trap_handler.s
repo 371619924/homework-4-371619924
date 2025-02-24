@@ -228,6 +228,7 @@ __mtrap:
 terminate:
     # If it's not a misaligned load, jump to the default terminate routine
     j terminate
+    #end
 
 
     
