@@ -131,7 +131,7 @@ __mstart:
 	
   	
 __mtrap:
-    # 交换 sp 和 mscratch，确保有内核栈可用
+    # 交换 sp 和 mscratch，确保有内核栈
     csrrw sp, mscratch, sp 
 
     # 预留 128 字节栈空间，保存所有寄存器
@@ -169,7 +169,7 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # 读取 mcause 检查是否是 Misaligned Load (mcause = 4)
+    # 读取 mcause，检查是否是 Misaligned Load (mcause = 4)
     csrr t0, mcause
     li t1, 4  # Misaligned Load Exception
     bne t0, t1, terminate  # 不是 misaligned load，跳转终止
@@ -186,7 +186,7 @@ __mtrap:
     srli t3, t1, 15     # 右移 15 位获取 rs1
     andi t3, t3, 0x1F
 
-    # 提取 offset（12-bit 立即数，带符号）
+    # 提取 offset（12-bit 立即数，带符号扩展）
     srai t4, t1, 20     # 直接符号扩展获取 offset
 
     # 计算目标地址
@@ -195,8 +195,8 @@ __mtrap:
 
     # 计算对齐地址和偏移
     andi t6, t5, 0x3    # 计算 misalignment 偏移
-    li t6, -4          # ✅ 正确的方式
-    and t7, t5, t6     # 计算对齐地址
+    li t7, -4           # 正确加载 -4
+    and t7, t5, t7      # 计算对齐地址（清除低 2 位）
 
     # 按字节加载
     lb a0, 0(t7)        # 读取低字节
@@ -280,7 +280,6 @@ store_rd:
 
     csrrw sp, mscratch, sp 
     mret
-
 
 
 # This code is taken from the default VRV system code. It prints out
