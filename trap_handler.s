@@ -182,30 +182,28 @@ __mtrap:
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address and its offset
+    # Get misaligned address
     csrr t3, mtval            # Get misaligned address
-    andi t4, t3, 0x3          # Get offset within word (0-3)
 
-    # Create aligned address
-    andi t3, t3, -4           # Align address to word boundary
+    # Load bytes in correct order
+    lbu t4, 0(t3)             # First byte
+    lbu t5, 1(t3)             # Second byte
+    lbu t6, 2(t3)             # Third byte
+    lb a0, 3(t3)              # Fourth byte (signed)
 
-    # Load the two words we need
-    lw t5, 0(t3)              # Load first aligned word
-    lw t6, 4(t3)              # Load next aligned word
-
-    # Shift based on offset
-    li a0, 8
-    mul a0, t4, a0            # Convert offset to bits
-    srl t5, t5, a0            # Shift first word right
-    li a0, 32
-    sub a0, a0, a0            # Calculate left shift
-    sll t6, t6, a0            # Shift second word left
-    or t5, t5, t6             # Combine the words
+    # Combine bytes in little-endian order
+    mv t1, t4                 # Start with first byte
+    slli t5, t5, 8            # Position second byte
+    slli t6, t6, 16           # Position third byte
+    slli a0, a0, 24           # Position fourth byte
+    or t1, t1, t5             # Add second byte
+    or t1, t1, t6             # Add third byte
+    or t1, t1, a0             # Add fourth byte
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw t5, 0(t2)              # Save result
+    sw t1, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
