@@ -131,123 +131,104 @@ __mstart:
 	
   	
 __mtrap:
-    # Swap SP and mscratch to get trap stack
-    csrrw sp, mscratch, sp 
+    # Save all registers
+    addi sp, sp, -128                # Allocate space on the stack for registers
+    sw ra, 0(sp)
+    sw s0, 4(sp)
+    sw s1, 8(sp)
+    sw s2, 12(sp)
+    sw s3, 16(sp)
+    sw s4, 20(sp)
+    sw s5, 24(sp)
+    sw s6, 28(sp)
+    sw s7, 32(sp)
+    sw s8, 36(sp)
+    sw s9, 40(sp)
+    sw s10, 44(sp)
+    sw s11, 48(sp)
+    sw t0, 52(sp)
+    sw t1, 56(sp)
+    sw t2, 60(sp)
+    sw t3, 64(sp)
+    sw t4, 68(sp)
+    sw t5, 72(sp)
+    sw t6, 76(sp)
+    sw a0, 80(sp)
+    sw a1, 84(sp)
+    sw a2, 88(sp)
+    sw a3, 92(sp)
+    sw a4, 96(sp)
+    sw a5, 100(sp)
+    sw a6, 104(sp)
+    sw a7, 108(sp)
 
-    # Save all registers to preserve state
-    addi sp, sp, -128
-    sw x0, 0(sp)
-    sw x1, 4(sp)
-    sw x3, 12(sp)
-    sw x4, 16(sp)
-    sw x5, 20(sp)
-    sw x6, 24(sp)
-    sw x7, 28(sp)
-    sw x8, 32(sp)
-    sw x9, 36(sp)
-    sw x10, 40(sp)
-    sw x11, 44(sp)
-    sw x12, 48(sp)
-    sw x13, 52(sp)
-    sw x14, 56(sp)
-    sw x15, 60(sp)
-    sw x16, 64(sp)
-    sw x17, 68(sp)
-    sw x18, 72(sp)
-    sw x19, 76(sp)
-    sw x20, 80(sp)
-    sw x21, 84(sp)
-    sw x22, 88(sp)
-    sw x23, 92(sp)
-    sw x24, 96(sp)
-    sw x25, 100(sp)
-    sw x26, 104(sp)
-    sw x27, 108(sp)
-    sw x28, 112(sp)
-    sw x29, 116(sp)
-    sw x30, 120(sp)
-    sw x31, 124(sp)
+    # Check for misaligned load (exception code 4) in mcause
+    csrr t0, mcause                   # Load mcause CSR
+    li t1, 4                          # Misaligned load code
+    and t2, t0, 0x7F                  # Extract exception code (bits 6-0)
+    bne t2, t1, terminate              # If it's not a misaligned load, terminate
 
-    # Check cause of trap
-    csrr t0, mcause
-    li t1, 4                  # Load misaligned code
-    bne t0, t1, terminate     # If not misaligned load, terminate
+    # Misaligned load: process the load as a series of 4 byte loads
+    csrr t0, mtval                    # Get the address that caused the exception (mtval)
+    li t1, 0                          # Initialize temporary register for result
+    lb t2, 0(t0)                      # Load byte 1
+    slli t1, t1, 8                    # Shift result by 8 bits
+    or t1, t1, t2                     # Add byte 1 to result
+    lb t2, 1(t0)                      # Load byte 2
+    slli t1, t1, 8                    # Shift result by 8 bits
+    or t1, t1, t2                     # Add byte 2 to result
+    lb t2, 2(t0)                      # Load byte 3
+    slli t1, t1, 8                    # Shift result by 8 bits
+    or t1, t1, t2                     # Add byte 3 to result
+    lb t2, 3(t0)                      # Load byte 4
+    or t1, t1, t2                     # Add byte 4 to result
 
-    # Get faulting instruction
-    csrr t0, mepc             # Get instruction pointer
-    lw t1, 0(t0)              # Get instruction
-    
-    # Extract destination register
-    srli t2, t1, 7            # Shift right to get rd
-    andi t2, t2, 0x1f         # Mask to get 5 bits
+    # Store the result into the destination register (a0)
+    csrr t2, mepc                     # Get current instruction address (mepc)
+    addi t2, t2, 4                    # Increment to the next instruction address
+    sw t1, 0(a0)                      # Store result into the destination register (a0)
 
-    # Get misaligned address and word-aligned addresses
-    csrr t3, mtval            # Get misaligned address
-    andi t4, t3, 0x3          # Get offset within word
-    andi t5, t3, -4           # Get word-aligned address
-    
-    # Load both aligned words that contain our data
-    lw t6, 0(t5)              # Load first word
-    lw a0, 4(t5)              # Load next word
+    # Increment mepc to the next instruction
+    csrw mepc, t2
 
-    # Calculate number of bits to shift based on offset
-    slli t4, t4, 3            # Convert byte offset to bits (multiply by 8)
-    
-    # Extract bytes from the aligned words
-    srl t6, t6, t4            # Right shift first word by offset
-    li t1, 32                 # Bits in a word
-    sub t1, t1, t4            # Calculate complementary shift
-    sll a0, a0, t1            # Left shift second word
-    or t6, t6, a0             # Combine the parts to get our value
+    # Restore all registers
+    lw ra, 0(sp)
+    lw s0, 4(sp)
+    lw s1, 8(sp)
+    lw s2, 12(sp)
+    lw s3, 16(sp)
+    lw s4, 20(sp)
+    lw s5, 24(sp)
+    lw s6, 28(sp)
+    lw s7, 32(sp)
+    lw s8, 36(sp)
+    lw s9, 40(sp)
+    lw s10, 44(sp)
+    lw s11, 48(sp)
+    lw t0, 52(sp)
+    lw t1, 56(sp)
+    lw t2, 60(sp)
+    lw t3, 64(sp)
+    lw t4, 68(sp)
+    lw t5, 72(sp)
+    lw t6, 76(sp)
+    lw a0, 80(sp)
+    lw a1, 84(sp)
+    lw a2, 88(sp)
+    lw a3, 92(sp)
+    lw a4, 96(sp)
+    lw a5, 100(sp)
+    lw a6, 104(sp)
+    lw a7, 108(sp)
+    addi sp, sp, 128                 # Restore the stack pointer
 
-    # Store the result in the original destination register location
-    slli t2, t2, 2            # Multiply rd by 4 for offset
-    add t2, sp, t2            # Get stack location
-    sw t6, 0(t2)              # Save result
+    # Return from the trap handler
+    mret                             # Return to the next instruction
 
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
+terminate:
+    # If it's not a misaligned load, jump to the default terminate routine
+    j terminate
 
-    # Restore all registers 
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    addi sp, sp, 128
-
-    # Restore original stack pointer
-    csrrw sp, mscratch, sp
-
-    # Return from trap
-    mret
 
     
 # This code is taken from the default VRV system code. It prints out
