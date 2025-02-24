@@ -129,8 +129,7 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 	
-  	
-__mtrap:
+ __mtrap:
     # Save all registers
     addi sp, sp, -128                # Allocate space on the stack for registers
     sw ra, 0(sp)
@@ -228,7 +227,6 @@ __mtrap:
 terminate:
     # If it's not a misaligned load, jump to the default terminate routine
     j terminate
-    #end
 
 
     
