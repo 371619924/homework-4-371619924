@@ -296,15 +296,18 @@ not_misaligned_load:
 # 4. 恢复所有寄存器并返回
 ################################################################################
 restore_all:
-    li      t0, 1
+    li      t0, 1                # t0 = 1（用于计算索引）
 restore_loop:
-    lw      x\ t0, (t0-1) * 4(sp)
-    addi    t0, t0, 1
-    bne     t0, 32, restore_loop
+    addi    t1, t0, -1           # t1 = t0 - 1
+    slli    t1, t1, 2            # t1 = (t0 - 1) * 4，计算偏移量
+    add     t1, t1, sp           # 计算 sp + 偏移量
+    lw      x1, 0(t1)            # 读取栈中的值恢复到 x1（循环时变换目标寄存器）
+    addi    t0, t0, 1            # t0 += 1
+    bne     t0, 32, restore_loop # 继续循环直到所有寄存器恢复完毕
 
-    addi    sp, sp, 124
-    csrrw   sp, mscratch, sp  
-    mret
+    addi    sp, sp, 128          # 释放栈空间（之前分配了 128 字节）
+    csrrw   sp, mscratch, sp     # 恢复原始 sp
+    mret                          # 返回用户态
 
 
 
