@@ -140,33 +140,33 @@ __mtrap:
     sw      ra,   0(sp)       # x1 (ra)
     sw      gp,   4(sp)       # x3 (gp)
     sw      tp,   8(sp)       # x4 (tp)
-    sw      t0,  12(sp)      # x5 (t0)
-    sw      t1,  16(sp)      # x6 (t1)
-    sw      t2,  20(sp)      # x7 (t2)
-    sw      s0,  24(sp)      # x8 (s0)
-    sw      s1,  28(sp)      # x9 (s1)
-    sw      a0,  32(sp)      # x10 (a0)
-    sw      a1,  36(sp)      # x11 (a1)
-    sw      a2,  40(sp)      # x12 (a2)
-    sw      a3,  44(sp)      # x13 (a3)
-    sw      a4,  48(sp)      # x14 (a4)
-    sw      a5,  52(sp)      # x15 (a5)
-    sw      a6,  56(sp)      # x16 (a6)
-    sw      a7,  60(sp)      # x17 (a7)
-    sw      s2,  64(sp)      # x18 (s2)
-    sw      s3,  68(sp)      # x19 (s3)
-    sw      s4,  72(sp)      # x20 (s4)
-    sw      s5,  76(sp)      # x21 (s5)
-    sw      s6,  80(sp)      # x22 (s6)
-    sw      s7,  84(sp)      # x23 (s7)
-    sw      s8,  88(sp)      # x24 (s8)
-    sw      s9,  92(sp)      # x25 (s9)
-    sw      s10, 96(sp)      # x26 (s10)
-    sw      s11,100(sp)      # x27 (s11)
-    sw      t3,104(sp)       # x28 (t3)
-    sw      t4,108(sp)       # x29 (t4)
-    sw      t5,112(sp)       # x30 (t5)
-    sw      t6,116(sp)       # x31 (t6)
+    sw      t0,  12(sp)       # x5 (t0)
+    sw      t1,  16(sp)       # x6 (t1)
+    sw      t2,  20(sp)       # x7 (t2)
+    sw      s0,  24(sp)       # x8 (s0)
+    sw      s1,  28(sp)       # x9 (s1)
+    sw      a0,  32(sp)       # x10 (a0)
+    sw      a1,  36(sp)       # x11 (a1)
+    sw      a2,  40(sp)       # x12 (a2)
+    sw      a3,  44(sp)       # x13 (a3)
+    sw      a4,  48(sp)       # x14 (a4)
+    sw      a5,  52(sp)       # x15 (a5)
+    sw      a6,  56(sp)       # x16 (a6)
+    sw      a7,  60(sp)       # x17 (a7)
+    sw      s2,  64(sp)       # x18 (s2)
+    sw      s3,  68(sp)       # x19 (s3)
+    sw      s4,  72(sp)       # x20 (s4)
+    sw      s5,  76(sp)       # x21 (s5)
+    sw      s6,  80(sp)       # x22 (s6)
+    sw      s7,  84(sp)       # x23 (s7)
+    sw      s8,  88(sp)       # x24 (s8)
+    sw      s9,  92(sp)       # x25 (s9)
+    sw      s10, 96(sp)       # x26 (s10)
+    sw      s11,100(sp)       # x27 (s11)
+    sw      t3,104(sp)        # x28 (t3)
+    sw      t4,108(sp)        # x29 (t4)
+    sw      t5,112(sp)        # x30 (t5)
+    sw      t6,116(sp)        # x31 (t6)
 
     # 检查异常代码：允许 mcause 为 4 或 5 时处理 misaligned lw
     csrr    t0, mcause
@@ -177,7 +177,7 @@ __mtrap:
     j       trap_other
 
 handle_load:
-    # 检查 mepc 是否为 0，如果是，则无法修复 misaligned load 异常，跳转到 trap_other
+    # 检查 mepc 是否为 0，如果是，则无法修复 misaligned load 异常
     csrr    t0, mepc
     beqz    t0, trap_other
 
@@ -189,18 +189,18 @@ handle_load:
     li      t3, 0x03
     bne     t2, t3, trap_other
 
-    # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
-    srl     t2, t1, 12         # 修改：使用逻辑右移提取字段
+    # 提取 funct3 字段（位 14:12），使用逻辑右移，不产生符号扩展
+    srl     t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
     bne     t2, t3, trap_other
 
-    # 提取目标寄存器号 rd（位 11:7）
-    srl     t4, t1, 7          # 修改：使用逻辑右移提取字段
+    # 提取目标寄存器号 rd（位 11:7），使用逻辑右移
+    srl     t4, t1, 7
     andi    t4, t4, 0x1F
-    beq     t4, zero, trap_other       # 若 rd 为 0，不补丁
+    beq     t4, zero, trap_other    # 若 rd 为 0，不补丁
     li      t2, 2
-    beq     t4, t2, trap_other         # 若 rd 为 sp (x2)，不处理
+    beq     t4, t2, trap_other      # 若 rd 为 sp (x2)，不处理
     li      t2, 1
     beq     t4, t2, update_offset
     addi    t2, t4, -2
@@ -209,23 +209,21 @@ handle_load:
 update_offset:
     li      t2, 0
 done_offset:
-    add     t2, sp, t2     # t2 指向 trap frame 中目的寄存器槽
-    mv      a7, t2       # 保存该地址以便写入补丁数据
+    add     t2, sp, t2              # t2 指向 trap frame 中目的寄存器槽
+    mv      a7, t2                # 保存该地址以便写入补丁数据
 
     # 重构 misaligned lw 数据：从 mtval 中加载连续 4 字节
-    csrr    t5, mtval      # t5 = 故障访问地址
-    # 在此处加入有效地址检查，确保 mtval 合理
-    # 如果 mtval 地址不合法，直接跳转到 trap_other 进行终止处理
+    csrr    t5, mtval             # t5 = 故障访问地址
     li      t6, 0x1000
-    blt     t5, t6, trap_other   # 如果 mtval 地址小于某个阈值，认为不合法（可根据实际内存布局调整）
+    blt     t5, t6, trap_other    # 如果 mtval 地址小于阈值，则不合法
 
-    lbu     t6, 0(t5)      # 加载字节0
+    lbu     t6, 0(t5)             # 加载字节0
     addi    t0, t5, 1
-    lbu     t1, 0(t0)      # 加载字节1
+    lbu     t1, 0(t0)             # 加载字节1
     addi    t0, t5, 2
-    lbu     t2, 0(t0)      # 加载字节2
+    lbu     t2, 0(t0)             # 加载字节2
     addi    t0, t5, 3
-    lbu     t3, 0(t0)      # 加载字节3
+    lbu     t3, 0(t0)             # 加载字节3
 
     slli    t1, t1, 8
     slli    t2, t2, 16
@@ -234,7 +232,7 @@ done_offset:
     or      t6, t6, t2
     or      t6, t6, t3
 
-    # 将重构的结果写入 trap frame 中目标寄存器保存位置
+    # 将重构的结果写入 trap frame 中目标寄存器位置
     sw      t6, 0(a7)
 
     # 更新 mepc，跳过 faulting 指令（4 字节）
@@ -242,7 +240,7 @@ done_offset:
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 按保存顺序恢复所有寄存器
+    # 恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -275,7 +273,7 @@ done_offset:
     lw      t6,116(sp)
     addi    sp, sp, 120
 
-    # 恢复用户 sp：交换 sp 与 mscratch，并返回用户代码
+    # 恢复用户 sp，并返回用户代码
     csrrw   sp, mscratch, sp
     mret
 
@@ -283,6 +281,7 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 
