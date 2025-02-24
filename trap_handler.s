@@ -128,7 +128,6 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
-### Trap handler
 
 __mtrap:
     # 交换 sp 和 mscratch
@@ -168,22 +167,24 @@ __mtrap:
     sw      sp, 116(sp)  # 保存 sp
 
     # 检查异常原因
-    csrr    t0, mcause     
-    li      t1, 4          
+    csrr    t0, mcause     # 读取 mcause
+    li      t1, 4         # Misaligned load exception code
     bne     t0, t1, not_misaligned_load
 
     # 读取 mepc 并解码指令
-    csrr    t2, mepc      
-    lw     t3, 0(t2)     
-    li      t4, 0x00000003
-    andi    t3, t3, 0x7F  
-    bne     t3, t4, not_misaligned_load
+    csrr    t2, mepc      # 获取异常指令地址
+    lw      t3, 0(t2)     # 读取指令
+    li      t5, 0x00000003 # lw 指令的 opcode
+    andi    t3, t3, 0x7F  # 提取指令 opcode
+    bne     t3, t5, not_misaligned_load
 
+    # 处理 misaligned load
 misaligned_load_handler:
-    csrr    t1, mtval
-    li      t2, -4
+    csrr    t1, mtval     # 获取未对齐地址
+    li      t2, -4        # 计算对齐地址
     and     t2, t1, t2
 
+    # 读取 4 个字节并组合
     lbu     t3, 0(t2)
     lbu     t4, 1(t2)
     lbu     t5, 2(t2)
@@ -192,30 +193,64 @@ misaligned_load_handler:
     slli    t4, t4, 8
     slli    t5, t5, 16
     slli    t6, t6, 24
-
     or      t3, t3, t4
     or      t3, t3, t5
     or      t3, t3, t6
 
-    # 解析 rd 并存入
-    csrr    t5, mepc  
-    lw     t6, 0(t5) 
-    srli    t4, t6, 7  
+    # 解析指令并存入目标寄存器
+    srli    t4, t3, 7   # 获取 rd 字段
     andi    t4, t4, 0x1F
-    mv      x(t4), t3  
 
-    # 继续执行
+    # 确保 rd 不是 x0
+    beqz    t4, skip_store
+    slli    t5, t4, 0   # 确保 rd 可寻址
+    add     t5, zero, t3
+    sw      t5, 0(sp)  # 存入 rd
+
+skip_store:
+    # 恢复 mepc 继续执行
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     # 恢复所有寄存器
-    lw      sp, 116(sp)  
-    addi    sp, sp, 128  
+    lw      x0, 0(sp)
+    lw      ra, 4(sp)
+    lw      t0, 8(sp)
+    lw      t1, 12(sp)
+    lw      t2, 16(sp)
+    lw      t3, 20(sp)
+    lw      t4, 24(sp)
+    lw      t5, 28(sp)
+    lw      t6, 32(sp)
+    lw      a0, 36(sp)
+    lw      a1, 40(sp)
+    lw      a2, 44(sp)
+    lw      a3, 48(sp)
+    lw      a4, 52(sp)
+    lw      a5, 56(sp)
+    lw      a6, 60(sp)
+    lw      a7, 64(sp)
+    lw      s0, 68(sp)
+    lw      s1, 72(sp)
+    lw      s2, 76(sp)
+    lw      s3, 80(sp)
+    lw      s4, 84(sp)
+    lw      s5, 88(sp)
+    lw      s6, 92(sp)
+    lw      s7, 96(sp)
+    lw      s8, 100(sp)
+    lw      s9, 104(sp)
+    lw      s10, 108(sp)
+    lw      s11, 112(sp)
+    lw      sp, 116(sp)  # 恢复 sp
+    addi    sp, sp, 128  # 释放栈空间
     mret
 
 not_misaligned_load:
+    # 跳转到 terminate 终止程序
     j       terminate
+
 
 
 
