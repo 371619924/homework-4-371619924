@@ -130,140 +130,104 @@ __mstart:
 
 	
   	
-    .globl __mtrap
+ .globl __mtrap
 __mtrap:
-    # 交换 sp 与 mscratch
-    csrrw   sp, mscratch, sp
-
-    # 分配 trap frame 空间，保存所有寄存器（x1 - x31）
-    addi    sp, sp, -128
-
-    # 保存寄存器
-    sw      ra,   0(sp)
-    sw      gp,   4(sp)
-    sw      tp,   8(sp)
-    sw      t0,  12(sp)
-    sw      t1,  16(sp)
-    sw      t2,  20(sp)
-    sw      s0,  24(sp)
-    sw      s1,  28(sp)
-    sw      a0,  32(sp)
-    sw      a1,  36(sp)
-    sw      a2,  40(sp)
-    sw      a3,  44(sp)
-    sw      a4,  48(sp)
-    sw      a5,  52(sp)
-    sw      a6,  56(sp)
-    sw      a7,  60(sp)
-    sw      s2,  64(sp)
-    sw      s3,  68(sp)
-    sw      s4,  72(sp)
-    sw      s5,  76(sp)
-    sw      s6,  80(sp)
-    sw      s7,  84(sp)
-    sw      s8,  88(sp)
-    sw      s9,  92(sp)
-    sw      s10, 96(sp)
-    sw      s11,100(sp)
-    sw      t3,104(sp)
-    sw      t4,108(sp)
-    sw      t5,112(sp)
-    sw      t6,116(sp)
-
-    # 读取异常原因
-    csrr    t0, mcause
-    li      t1, 4
-    bne     t0, t1, trap_other  # 仅处理 misaligned lw，其它跳到 terminate
-
-    # 读取 misaligned load 地址
-    csrr    t5, mtval      # t5 = misaligned address (e.g. 0x100010dd)
-
-    # 计算对齐地址
-    andi    t6, t5, -4     # t6 = aligned address (0x100010dc)
-
-    # 加载 4 个字节
-    lbu     t0, 0(t6)      # 低字节
-    lbu     t1, 1(t6)
-    lbu     t2, 2(t6)
-    lbu     t3, 3(t6)      # 高字节
-
-    # 拼接 32 位数值
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t0, t0, t1
-    or      t0, t0, t2
-    or      t0, t0, t3
-
-    # 读取触发异常的指令地址
-    csrr    t4, mepc
-    lw      t5, 0(t4)      # 取出指令
-
-    # 解析 rd（位 11:7）
-    srai    t5, t5, 7
-    andi    t5, t5, 0x1F   # t5 = rd
-
-    # 如果 rd == x0，直接跳过
-    beq     t5, zero, skip_store
-
-    # 计算目标寄存器在 trap frame 的位置
-    slli    t6, t5, 2      # rd * 4
-    add     t6, sp, t6     # sp + offset
-
-    # 存入修正值
-    sw      t0, 0(t6)
-
-skip_store:
-    # 跳过异常指令
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    # 恢复寄存器
-    lw      ra,   0(sp)
-    lw      gp,   4(sp)
-    lw      tp,   8(sp)
-    lw      t0,  12(sp)
-    lw      t1,  16(sp)
-    lw      t2,  20(sp)
-    lw      s0,  24(sp)
-    lw      s1,  28(sp)
-    lw      a0,  32(sp)
-    lw      a1,  36(sp)
-    lw      a2,  40(sp)
-    lw      a3,  44(sp)
-    lw      a4,  48(sp)
-    lw      a5,  52(sp)
-    lw      a6,  56(sp)
-    lw      a7,  60(sp)
-    lw      s2,  64(sp)
-    lw      s3,  68(sp)
-    lw      s4,  72(sp)
-    lw      s5,  76(sp)
-    lw      s6,  80(sp)
-    lw      s7,  84(sp)
-    lw      s8,  88(sp)
-    lw      s9,  92(sp)
-    lw      s10, 96(sp)
-    lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
-    addi    sp, sp, 128
-
-    # 恢复用户 sp
-    csrrw   sp, mscratch, sp
-
-    # 返回用户代码
+    # 交换 sp 与 mscratch：使 sp 成为内核栈指针，mscratch 保存用户 sp
+    csrrw sp, mscratch, sp
+    
+    # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 30×4 = 120 字节
+    addi sp, sp, -120
+    sw ra, 0(sp)  # x1 (ra)
+    sw gp, 4(sp)  # x3 (gp)
+    sw tp, 8(sp)  # x4 (tp)
+    sw t0, 12(sp) # x5 (t0)
+    sw t1, 16(sp) # x6 (t1)
+    sw t2, 20(sp) # x7 (t2)
+    sw s0, 24(sp) # x8 (s0)
+    sw s1, 28(sp) # x9 (s1)
+    sw a0, 32(sp) # x10 (a0)
+    sw a1, 36(sp) # x11 (a1)
+    sw a2, 40(sp) # x12 (a2)
+    sw a3, 44(sp) # x13 (a3)
+    sw a4, 48(sp) # x14 (a4)
+    sw a5, 52(sp) # x15 (a5)
+    sw a6, 56(sp) # x16 (a6)
+    sw a7, 60(sp) # x17 (a7)
+    sw s2, 64(sp) # x18 (s2)
+    sw s3, 68(sp) # x19 (s3)
+    sw s4, 72(sp) # x20 (s4)
+    sw s5, 76(sp) # x21 (s5)
+    sw s6, 80(sp) # x22 (s6)
+    sw s7, 84(sp) # x23 (s7)
+    sw s8, 88(sp) # x24 (s8)
+    sw s9, 92(sp) # x25 (s9)
+    sw s10, 96(sp) # x26 (s10)
+    sw s11,100(sp) # x27 (s11)
+    sw t3,104(sp) # x28 (t3)
+    sw t4,108(sp) # x29 (t4)
+    sw t5,112(sp) # x30 (t5)
+    sw t6,116(sp) # x31 (t6)
+    
+    # 检查异常类型：misaligned load 异常 (mcause == 4)
+    csrr t0, mcause
+    li t1, 4
+    bne t0, t1, trap_other
+    
+    # 取得 misaligned lw 指令地址与指令字
+    csrr t0, mepc  # t0 = 出错指令地址
+    lw t1, 0(t0)   # t1 = 指令字
+    
+    # 检查 opcode（低 7 位）是否为 0x03（load 指令）
+    andi t2, t1, 0x7F
+    li t3, 0x03
+    bne t2, t3, trap_other
+    
+    # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+    srai t2, t1, 12
+    andi t2, t2, 0x7
+    li t3, 0x2
+    bne t2, t3, trap_other
+    
+    # 提取目标寄存器号 rd（位 11:7）
+    srai t4, t1, 7
+    andi t4, t4, 0x1F  # t4 = rd
+    beq t4, zero, trap_other  # 若 rd 为 0，不补丁
+    
+    # 计算 misaligned 地址并读取数据
+    csrr t5, mtval  # t5 = 触发异常的地址
+    lbu t6, 0(t5)    # 加载字节0
+    lbu t2, 1(t5)    # 加载字节1
+    lbu t3, 2(t5)    # 加载字节2
+    lbu t1, 3(t5)    # 加载字节3
+    
+    # 组合数据
+    slli t2, t2, 8
+    slli t3, t3, 16
+    slli t1, t1, 24
+    or t6, t6, t2
+    or t6, t6, t3
+    or t6, t6, t1
+    
+    # 计算 rd 在 trap frame 里的偏移量，并存入修复后的值
+    addi t2, t4, -2
+    slli t2, t2, 2
+    add t2, sp, t2
+    sw t6, 0(t2)  # 将修复的值写入寄存器槽
+    
+    # 跳过 misaligned 指令（mepc += 4）
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+    
+    # 恢复寄存器并返回
+    addi sp, sp, 120
+    csrrw sp, mscratch, sp
     mret
 
 trap_other:
-    # 其他异常，恢复寄存器并跳到 terminate
-    addi    sp, sp, 128
-    csrrw   sp, mscratch, sp
-    j       terminate
-
+    addi sp, sp, 120
+    csrrw sp, mscratch, sp
+    j terminate
 
 
 # This code is taken from the default VRV system code. It prints out
