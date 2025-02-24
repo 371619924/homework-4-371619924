@@ -182,28 +182,31 @@ __mtrap:
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address
+    # Get misaligned address and offset
     csrr t3, mtval            # Get misaligned address
+    andi t4, t3, 0x3          # Get offset within word (0-3)
 
-    # Load bytes in correct order
-    lbu t4, 0(t3)             # First byte
-    lbu t5, 1(t3)             # Second byte
-    lbu t6, 2(t3)             # Third byte
-    lb a0, 3(t3)              # Fourth byte (signed)
+    # Calculate aligned addresses
+    andi t5, t3, -4           # Get aligned address by masking off bottom 2 bits
+    addi t6, t5, 4            # Get next aligned address
 
-    # Combine bytes in little-endian order
-    mv t1, t4                 # Start with first byte
-    slli t5, t5, 8            # Position second byte
-    slli t6, t6, 16           # Position third byte
-    slli a0, a0, 24           # Position fourth byte
-    or t1, t1, t5             # Add second byte
-    or t1, t1, t6             # Add third byte
-    or t1, t1, a0             # Add fourth byte
+    # Load aligned words
+    lw a0, 0(t5)              # Load first aligned word
+    lw a1, 0(t6)              # Load second aligned word
+
+    # Adjust based on offset
+    li t1, 8                  # Bits per byte
+    mul t1, t4, t1            # Convert offset to bits
+    srl a0, a0, t1            # Shift right first word
+    li t1, 32                 # Total bits
+    sub t1, t1, t1            # Get remaining bits
+    sll a1, a1, t1            # Shift left second word
+    or a0, a0, a1             # Combine to get misaligned word
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw t1, 0(t2)              # Save result
+    sw a0, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -248,8 +251,6 @@ __mtrap:
 
     # Return from trap
     mret
-
-
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
