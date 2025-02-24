@@ -137,69 +137,72 @@ __mtrap:
 
     # 为 trap frame 分配 120 字节空间，保存 x1, x3~x31
     addi    sp, sp, -120
-    sw      ra,   0(sp)       # x1 (ra)
-    sw      gp,   4(sp)       # x3 (gp)
-    sw      tp,   8(sp)       # x4 (tp)
-    sw      t0,  12(sp)       # x5 (t0)
-    sw      t1,  16(sp)       # x6 (t1)
-    sw      t2,  20(sp)       # x7 (t2)
-    sw      s0,  24(sp)       # x8 (s0)
-    sw      s1,  28(sp)       # x9 (s1)
-    sw      a0,  32(sp)       # x10 (a0)
-    sw      a1,  36(sp)       # x11 (a1)
-    sw      a2,  40(sp)       # x12 (a2)
-    sw      a3,  44(sp)       # x13 (a3)
-    sw      a4,  48(sp)       # x14 (a4)
-    sw      a5,  52(sp)       # x15 (a5)
-    sw      a6,  56(sp)       # x16 (a6)
-    sw      a7,  60(sp)       # x17 (a7)
-    sw      s2,  64(sp)       # x18 (s2)
-    sw      s3,  68(sp)       # x19 (s3)
-    sw      s4,  72(sp)       # x20 (s4)
-    sw      s5,  76(sp)       # x21 (s5)
-    sw      s6,  80(sp)       # x22 (s6)
-    sw      s7,  84(sp)       # x23 (s7)
-    sw      s8,  88(sp)       # x24 (s8)
-    sw      s9,  92(sp)       # x25 (s9)
-    sw      s10, 96(sp)       # x26 (s10)
-    sw      s11,100(sp)       # x27 (s11)
-    sw      t3,104(sp)        # x28 (t3)
-    sw      t4,108(sp)        # x29 (t4)
-    sw      t5,112(sp)        # x30 (t5)
-    sw      t6,116(sp)        # x31 (t6)
+    sw      ra,   0(sp)
+    sw      gp,   4(sp)
+    sw      tp,   8(sp)
+    sw      t0,  12(sp)
+    sw      t1,  16(sp)
+    sw      t2,  20(sp)
+    sw      s0,  24(sp)
+    sw      s1,  28(sp)
+    sw      a0,  32(sp)
+    sw      a1,  36(sp)
+    sw      a2,  40(sp)
+    sw      a3,  44(sp)
+    sw      a4,  48(sp)
+    sw      a5,  52(sp)
+    sw      a6,  56(sp)
+    sw      a7,  60(sp)
+    sw      s2,  64(sp)
+    sw      s3,  68(sp)
+    sw      s4,  72(sp)
+    sw      s5,  76(sp)
+    sw      s6,  80(sp)
+    sw      s7,  84(sp)
+    sw      s8,  88(sp)
+    sw      s9,  92(sp)
+    sw      s10, 96(sp)
+    sw      s11,100(sp)
+    sw      t3,104(sp)
+    sw      t4,108(sp)
+    sw      t5,112(sp)
+    sw      t6,116(sp)
 
     # 检查异常代码
     csrr    t0, mcause
-    li      t1, 4             # Misaligned load address
+    li      t1, 4
     beq     t0, t1, handle_load
-    j       trap_other        # 其他异常终止程序
+    j       trap_other
 
 handle_load:
     csrr    t0, mepc
-    beqz    t0, trap_other    # MEPC 为 0，无法修复
+    beqz    t0, trap_other
 
-    csrr    t5, mtval         # 读取 MTVAL（故障地址）
-    li      t6, -4        # 0xFFFFFFFC，相当于 ~0x3
-    and     t6, t5, t6    # 计算对齐的地址（向下取整）
-      
-    lw      t1, 0(t6)         # 加载对齐地址的数据
-    lw      t2, 4(t6)         # 加载下一个对齐 word
+    csrr    t5, mtval
+    li      t6, -4
+    and     t6, t5, t6
 
-    andi    t3, t5, 0x3       # 计算 misaligned 偏移
-    slli    t3, t3, 3         # 偏移量 * 8
-    srl     t1, t1, t3        # 右移获取高位
-    sll     t2, t2, 32 - t3   # 左移获取低位
-    or      t1, t1, t2        # 组合完整 word
+    lw      t1, 0(t6)
+    lw      t2, 4(t6)
 
-    # 读取指令，获取目的寄存器
-    lw      t4, 0(t0)         # 取出指令
-    srli    t4, t4, 7         # 提取 rd（目的寄存器）
+    andi    t3, t5, 0x3
+    slli    t3, t3, 3
+    srl     t1, t1, t3
+
+    li      t7, 32
+    sub     t3, t7, t3
+    sll     t2, t2, t3
+    or      t1, t1, t2
+
+    csrr    t0, mepc
+    lw      t4, 0(t0)
+
+    srli    t4, t4, 7
     andi    t4, t4, 0x1F
-    beqz    t4, restore_regs  # 如果 rd = 0，不需要存值
+    beqz    t4, restore_regs
 
-    # 计算 rd 在 trap frame 中的偏移
     li      t2, 1
-    beq     t4, t2, restore_regs # 若目标寄存器是 sp（x2），不处理
+    beq     t4, t2, restore_regs
     li      t2, 2
     beq     t4, t2, set_offset
     addi    t2, t4, -2
@@ -208,16 +211,14 @@ handle_load:
 set_offset:
     li      t2, 0
 done_offset:
-    add     t2, sp, t2         # 计算目标寄存器在栈中的偏移
-    sw      t1, 0(t2)          # 存入补丁数据
+    add     t2, sp, t2
+    sw      t1, 0(t2)
 
-    # 跳过故障指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
 restore_regs:
-    # 恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -243,14 +244,13 @@ restore_regs:
     lw      s8,  88(sp)
     lw      s9,  92(sp)
     lw      s10, 96(sp)
-    lw      s11, 100(sp)
-    lw      t3,  104(sp)
-    lw      t4,  108(sp)
-    lw      t5,  112(sp)
-    lw      t6,  116(sp)
+    lw      s11,100(sp)
+    lw      t3,104(sp)
+    lw      t4,108(sp)
+    lw      t5,112(sp)
+    lw      t6,116(sp)
     addi    sp, sp, 120
 
-    # 恢复用户 sp，并返回用户代码
     csrrw   sp, mscratch, sp
     mret
 
@@ -258,7 +258,6 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
-
 
 
 
