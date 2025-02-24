@@ -190,13 +190,13 @@ handle_load:
     bne     t2, t3, trap_other
 
     # 提取 funct3 字段（位 14:12），使用逻辑右移，不产生符号扩展
-    srl     t2, t1, 12
+    srli     t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
     bne     t2, t3, trap_other
 
     # 提取目标寄存器号 rd（位 11:7），使用逻辑右移
-    srl     t4, t1, 7
+    srli     t4, t1, 7
     andi    t4, t4, 0x1F
     beq     t4, zero, trap_other    # 若 rd 为 0，不补丁
     li      t2, 2
