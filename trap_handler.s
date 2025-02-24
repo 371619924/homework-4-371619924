@@ -138,7 +138,7 @@ __mtrap:
     # 分配 trap frame 空间，保存 30 个寄存器（x1, x3–x31）共 30×4 = 120 字节
     addi    sp, sp, -120
 
-    # 按要求保存寄存器，顺序：x1, x3, x4, x5, x6, x7, x8, x9, x10, …, x31
+    # 保存寄存器
     sw      ra,   0(sp)      # x1 (ra)
     sw      gp,   4(sp)      # x3 (gp)
     sw      tp,   8(sp)      # x4 (tp)
@@ -170,21 +170,21 @@ __mtrap:
     sw      t5,112(sp)       # x30 (t5)
     sw      t6,116(sp)       # x31 (t6)
 
-    # 检查异常类型：misaligned load 异常应为 mcause == 4
+    # 检查异常类型：misaligned load (mcause == 4)
     csrr    t0, mcause
     li      t1, 4
     bne     t0, t1, terminate
 
-    # 取得触发异常的 lw 指令地址与指令字
+    # 取得触发异常的 lw 指令地址
     csrr    t0, mepc         # t0 = 出错指令地址
     lw      t1, 0(t0)        # t1 = 指令字
 
-    # 检查 opcode（低 7 位）是否为 0x03（load 指令）
+    # 检查 opcode 是否为 0x03（Load 指令）
     andi    t2, t1, 0x7F
     li      t3, 0x03
     bne     t2, t3, terminate
 
-    # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
+    # 检查 funct3 是否为 0x2（lw 指令）
     srai    t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
@@ -193,30 +193,21 @@ __mtrap:
     # 提取目标寄存器号 rd（位 11:7）
     srai    t4, t1, 7
     andi    t4, t4, 0x1F   # t4 = rd
-    beq     t4, zero, terminate   # 若 rd 为 0，不补丁
+    beq     t4, zero, terminate   # 若 rd 为 x0，不补丁
     li      t2, 2
     beq     t4, t2, terminate     # 若 rd 为 sp (x2)，不处理
-    li      t2, 1
-    beq     t4, t2, update_offset
-    addi    t2, t4, -2
-    slli    t2, t2, 2
-    j       done_offset
-update_offset:
-    li      t2, 0
-done_offset:
-    add     t2, sp, t2     # t2 指向 trap frame 中目标寄存器槽
+
+    # 计算目标寄存器在 trap frame 中的偏移地址
+    slli    t2, t4, 2       # t2 = rd * 4
+    add     t2, sp, t2      # t2 = sp + (rd * 4) -> 计算寄存器存储的具体地址
     mv      a7, t2         # 保存该地址到 a7（后续用于写入补丁数据）
 
-    # 重构 misaligned load 数据：
-    # 直接从 mtval（出错的有效地址）加载连续 4 个字节
-    csrr    t5, mtval      # t5 = mtval（应为 lw 指令失配的地址，如 s0+2）
-    lbu     t6, 0(t5)      # 加载字节0
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)      # 加载字节1
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)      # 加载字节2
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)      # 加载字节3
+    # 从 misaligned 地址加载数据
+    csrr    t5, mtval      # t5 = misaligned address
+    lbu     t6, 0(t5)      # 读取字节 0
+    lbu     t1, 1(t5)      # 读取字节 1
+    lbu     t2, 2(t5)      # 读取字节 2
+    lbu     t3, 3(t5)      # 读取字节 3
 
     slli    t1, t1, 8
     slli    t2, t2, 16
@@ -225,15 +216,15 @@ done_offset:
     or      t6, t6, t2
     or      t6, t6, t3
 
-    # 将重构数据写入 trap frame 中对应目标寄存器位置
-    sw      t6, 0(a7)
+    # 存入 rd 对应位置
+    sw      t6, 0(a7)     # 这行代码保证正确写入 trap frame
 
-    # 更新 mepc（跳过出错指令 4 字节）
+    # 更新 mepc（跳过当前指令）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 按保存顺序恢复寄存器
+    # 恢复寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
@@ -266,10 +257,11 @@ done_offset:
     lw      t6,116(sp)
     addi    sp, sp, 120
 
-    # 恢复用户 sp：将 mscratch 中的值换回 sp
+    # 恢复用户 sp
     csrrw   sp, mscratch, sp
 
     mret
+
 
 
 
