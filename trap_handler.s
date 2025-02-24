@@ -131,10 +131,10 @@ __mstart:
 	
   	
 __mtrap:
-    # 交换 sp 和 mscratch，确保有内核栈
-    csrrw sp, mscratch, sp 
+    # Swap SP and mscratch to get the trap stack
+    csrrw sp, mscratch, sp
 
-    # 预留 128 字节栈空间，保存所有寄存器
+    # Save all registers to preserve state (x0 - x31)
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
@@ -169,82 +169,40 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # 读取 mcause，检查是否是 Misaligned Load (mcause = 4)
+    # Check the cause of the trap (mcause)
     csrr t0, mcause
-    li t1, 4  # Misaligned Load Exception
-    bne t0, t1, terminate  # 不是 misaligned load，跳转终止
+    li t1, 4                  # 0x4 is the code for misaligned load
+    bne t0, t1, terminate     # If not misaligned load, terminate
 
-    # 解析 lw 指令
-    csrr t0, mepc       # 获取指令地址
-    lw t1, 0(t0)        # 取出指令二进制码
+    # Get the address of the misaligned load from mtval
+    csrr t0, mtval            # Load the misaligned address (mtval)
 
-    # 提取 rd
-    srli t2, t1, 7      # 右移 7 位获取 rd 位置
-    andi t2, t2, 0x1F   # 只取低 5 位
+    # Extract the misalignment offset (t0 holds the address)
+    andi t1, t0, 0x3          # Mask out the last 2 bits (misalignment offset)
+    andi t2, t0, 0xFFFFFFFC   # Get the word-aligned base address
 
-    # 提取 rs1
-    srli t3, t1, 15     # 右移 15 位获取 rs1
-    andi t3, t3, 0x1F
+    # Load the two aligned words that contain our data
+    lw t3, 0(t2)              # Load the first word
+    lw t4, 4(t2)              # Load the second word (next aligned word)
 
-    # 提取 offset（12-bit 立即数，带符号扩展）
-    srai t4, t1, 20     # 直接符号扩展获取 offset
+    # Shift and combine the words based on the misalignment offset
+    slli t1, t1, 3            # Convert the byte offset into a bit offset (multiply by 8)
+    srl t3, t3, t1            # Shift the first word right by the offset
+    li t1, 32                 # Number of bits in a word (32-bit)
+    sub t1, t1, t1            # Calculate complementary shift for the second word
+    sll t4, t4, t1            # Shift the second word left
+    or t3, t3, t4             # Combine the two words into the final result
 
-    # 计算目标地址
-    add t5, t3, t4      # 计算未对齐地址
-    csrr t5, mtval      # 确保使用实际导致异常的地址
+    # Fetch the instruction to extract the destination register (rd)
+    csrr t1, mepc             # Get the program counter of the faulting instruction
+    lw t2, 0(t1)              # Load the instruction
+    srli t2, t2, 7            # Extract the rd (destination register)
+    andi t2, t2, 0x1F         # Mask the register value to get the correct rd (5 bits)
 
-    # 计算对齐地址和偏移
-    andi t6, t5, 0x3    # 计算 misalignment 偏移
-    li t7, -4           # 正确加载 -4
-    and t7, t5, t7      # 计算对齐地址（清除低 2 位）
+    # Store the result in the destination register
+    csrrw x0, t2, t3          # Store the result into the destination register
 
-    # 按字节加载
-    lb a0, 0(t7)        # 读取低字节
-    lb a1, 1(t7)        # 读取第二字节
-    lb a2, 2(t7)        # 读取第三字节
-    lb a3, 3(t7)        # 读取最高字节
-
-    # 根据偏移量调整顺序
-    beqz t6, store_rd   # 偏移量 0，直接存
-    li t8, 1
-    beq t6, t8, shift_1
-    li t8, 2
-    beq t6, t8, shift_2
-    li t8, 3
-    beq t6, t8, shift_3
-    j store_rd
-
-shift_1:
-    slli a1, a1, 8
-    slli a2, a2, 16
-    slli a3, a3, 24
-    or a0, a0, a1
-    or a0, a0, a2
-    or a0, a0, a3
-    j store_rd
-
-shift_2:
-    slli a2, a2, 8
-    slli a3, a3, 16
-    or a0, a0, a2
-    or a0, a0, a3
-    j store_rd
-
-shift_3:
-    slli a3, a3, 8
-    or a0, a0, a3
-    j store_rd
-
-store_rd:
-    slli t2, t2, 2      # 计算 rd 在栈上的偏移
-    sw a0, (t2)(sp)    # 存入目标寄存器在栈上的位置
-
-    # 跳过当前指令
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-
-    # 恢复寄存器并返回
+    # Restore all registers from the trap stack
     lw x0, 0(sp)
     lw x1, 4(sp)
     lw x2, 8(sp)
@@ -278,8 +236,9 @@ store_rd:
     lw x30, 120(sp)
     lw x31, 124(sp)
 
-    csrrw sp, mscratch, sp 
-    mret
+    # Restore SP and execute the return from the trap
+    csrrw sp, mscratch, sp
+    mret                     # Return from the trap
 
 
 # This code is taken from the default VRV system code. It prints out
