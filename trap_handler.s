@@ -226,9 +226,6 @@ __mstart:
     # Return from the trap handler
     mret                             # Return to the next instruction
 
-terminate:
-    # If it's not a misaligned load, jump to the default terminate routine
-    j terminate
 
 
     
