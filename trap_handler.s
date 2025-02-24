@@ -200,7 +200,7 @@ __mtrap:
     andi t2, t2, 0x1F         # Mask the register value to get the correct rd (5 bits)
 
     # Store the result in the destination register
-    csrrw x0, t2, t3          # Store the result into the destination register
+    mv t2, t3          # Store the result into the destination register
 
     # Restore all registers from the trap stack
     lw x0, 0(sp)
