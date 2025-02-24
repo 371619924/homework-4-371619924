@@ -171,7 +171,7 @@ __mtrap:
     # 检查异常类型：misaligned load 异常 (mcause == 4)
     csrr t0, mcause
     li t1, 4
-    bne t0, t1, terminate
+    bne t0, t1, trap_other
     
     # 取得 misaligned lw 指令地址与指令字
     csrr t0, mepc  # t0 = 出错指令地址
