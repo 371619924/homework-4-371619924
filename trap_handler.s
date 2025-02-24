@@ -130,7 +130,6 @@ __mstart:
 
 	
   	
-
 __mtrap:
     # Swap SP and mscratch to get trap stack
     csrrw sp, mscratch, sp 
@@ -182,28 +181,29 @@ __mtrap:
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address
+    # Get misaligned address and word-aligned addresses
     csrr t3, mtval            # Get misaligned address
+    andi t4, t3, 0x3          # Get offset within word
+    andi t5, t3, -4           # Get word-aligned address
+    
+    # Load both aligned words that contain our data
+    lw t6, 0(t5)              # Load first word
+    lw a0, 4(t5)              # Load next word
 
-    # Load bytes in reverse order to match expected word format
-    lbu t4, 3(t3)             # Load highest byte
-    lbu t5, 2(t3)             # Load second highest byte
-    lbu t6, 1(t3)             # Load second lowest byte
-    lb a0, 0(t3)              # Load lowest byte with sign extension
+    # Calculate number of bits to shift based on offset
+    slli t4, t4, 3            # Convert byte offset to bits (multiply by 8)
+    
+    # Extract bytes from the aligned words
+    srl t6, t6, t4            # Right shift first word by offset
+    li t1, 32                 # Bits in a word
+    sub t1, t1, t4            # Calculate complementary shift
+    sll a0, a0, t1            # Left shift second word
+    or t6, t6, a0             # Combine the parts to get our value
 
-    # Construct word in proper order
-    mv t1, a0                 # Start with lowest byte
-    slli t6, t6, 8            # Position second lowest byte
-    slli t5, t5, 16           # Position second highest byte
-    slli t4, t4, 24           # Position highest byte
-    or t1, t1, t6             # Add second lowest byte
-    or t1, t1, t5             # Add second highest byte
-    or t1, t1, t4             # Add highest byte
-
-    # Store result in original destination register location
+    # Store the result in the original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw t1, 0(t2)              # Save result
+    sw t6, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
