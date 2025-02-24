@@ -132,7 +132,7 @@ __mstart:
   	
 __mtrap:
     # --- 交换 sp 和 mscratch，使用内核栈 ---
-    csrr    x24, mscratch      # x24 = 内核栈指针
+    csrr    x24, mscratch      # x24 = 内核栈指针 (t8 -> x24)
     csrw    mscratch, sp       # mscratch = 原始 sp
     mv      sp, x24            # sp 现在指向内核栈
 
@@ -143,11 +143,11 @@ __mtrap:
     sw      x2,   8(sp)
     sw      x3,  12(sp)
     sw      x4,  16(sp)
-    sw      x5,  20(sp)
-    sw      x6,  24(sp)
-    sw      x7,  28(sp)
-    sw      x8,  32(sp)
-    sw      x9,  36(sp)
+    sw      x5,  20(sp)   # t0 -> x5
+    sw      x6,  24(sp)   # t1 -> x6
+    sw      x7,  28(sp)   # t2 -> x7
+    sw      x8,  32(sp)   # s0 -> x8
+    sw      x9,  36(sp)   # s1 -> x9
     sw      x10, 40(sp)
     sw      x11, 44(sp)
     sw      x12, 48(sp)
@@ -156,121 +156,121 @@ __mtrap:
     sw      x15, 60(sp)
     sw      x16, 64(sp)
     sw      x17, 68(sp)
-    sw      x18, 72(sp)
-    sw      x19, 76(sp)
-    sw      x20, 80(sp)
-    sw      x21, 84(sp)
-    sw      x22, 88(sp)
-    sw      x23, 92(sp)
-    sw      x24, 96(sp)
-    sw      x25, 100(sp)
-    sw      x26, 104(sp)
-    sw      x27, 108(sp)
-    sw      x28, 112(sp)
-    sw      x29, 116(sp)
-    sw      x30, 120(sp)
-    sw      x31, 124(sp)
-
+    sw      x18, 72(sp)   # s2 -> x18
+    sw      x19, 76(sp)   # s3 -> x19
+    sw      x20, 80(sp)   # s4 -> x20
+    sw      x21, 84(sp)   # s5 -> x21
+    sw      x22, 88(sp)   # s6 -> x22
+    sw      x23, 92(sp)   # s7 -> x23
+    sw      x24, 96(sp)   # s8 -> x24
+    sw      x25, 100(sp)  # s9 -> x25
+    sw      x26, 104(sp)  # s10 -> x26
+    sw      x27, 108(sp)  # s11 -> x27
+    sw      x28, 112(sp)  # t3 -> x28
+    sw      x29, 116(sp)  # t4 -> x29
+    sw      x30, 120(sp)  # t5 -> x30
+    sw      x31, 124(sp)  # t6 -> x31
 
     # --- 读取 mcause 检查异常类型 ---
-    csrr    t0, mcause        # t0 = mcause
-    li      t1, 0x7FFFFFFF    # 清除最高位 (Interrupt bit)
-    and     t0, t0, t1        # t0 现在只包含异常代码
-    li      t1, 4             # Misaligned Load Exception (4)
-    bne     t0, t1, call_terminate  # 不是 misaligned load？终止
+    csrr    x5, mcause        # x5 = mcause (t0 -> x5)
+    li      x6, 0x7FFFFFFF    # 清除最高位 (Interrupt bit) (t1 -> x6)
+    and     x5, x5, x6        # x5 现在只包含异常代码
+    li      x6, 4             # Misaligned Load Exception (4)
+    bne     x5, x6, call_terminate  # 不是 misaligned load？终止
 
     # --- 读取 mepc 处的指令 ---
-    csrr    t2, mepc          # t2 = 触发异常的指令地址
-    lw      t3, 0(t2)         # t3 = 取指令
+    csrr    x7, mepc          # x7 = 触发异常的指令地址 (t2 -> x7)
+    lw      x28, 0(x7)        # x28 = 取指令 (t3 -> x28)
 
     # --- 确保是 lw 指令 ---
-    andi    t4, t3, 0x7F      # 提取 opcode (bits [6:0])
-    li      t5, 0x03
-    bne     t4, t5, call_terminate  # 不是 load 指令？终止
+    andi    x29, x28, 0x7F    # 提取 opcode (bits [6:0]) (t4 -> x29)
+    li      x30, 0x03
+    bne     x29, x30, call_terminate  # 不是 load 指令？终止
 
-    srli    t4, t3, 12
-    andi    t4, t4, 0x7       # 提取 funct3 (bits [14:12])
-    li      t5, 2             # lw 的 funct3 = 2
-    bne     t4, t5, call_terminate  # 不是 lw？终止
+    srli    x29, x28, 12
+    andi    x29, x29, 0x7     # 提取 funct3 (bits [14:12])
+    li      x30, 2            # lw 的 funct3 = 2
+    bne     x29, x30, call_terminate  # 不是 lw？终止
 
     # --- 获取 rd (目的寄存器) ---
-    srli    t4, t3, 7
-    andi    t4, t4, 0x1F      # t4 = 目的寄存器 rd
+    srli    x29, x28, 7
+    andi    x29, x29, 0x1F    # x29 = 目的寄存器 rd
 
     # --- 读取 misaligned 地址 ---
-    csrr    t6, mtval         # t6 = 访问的 misaligned 地址
+    csrr    x31, mtval        # x31 = 访问的 misaligned 地址 (t6 -> x31)
 
     # --- 逐字节加载并拼接 ---
-    lbu     t7, 0(t6)         # 低字节
-    lbu     t8, 1(t6)         # 次低字节
-    lbu     t9, 2(t6)         # 次高字节
-    lbu     t0, 3(t6)         # 高字节
+    lbu     x25, 0(x31)        # x25 = 低字节 (t7 -> x25)
+    lbu     x24, 1(x31)        # x24 = 次低字节 (t8 -> x24)
+    lbu     x26, 2(x31)        # x26 = 次高字节 (t9 -> x26)
+    lbu     x5,  3(x31)        # x5  = 高字节 (t0 -> x5)
 
-    slli    t0, t0, 24
-    slli    t9, t9, 16
-    slli    t8, t8, 8
-    or      t7, t7, t8
-    or      t7, t7, t9
-    or      t7, t7, t0        # t7 现在包含完整的 32 位值
+    slli    x5,  x5,  24       # Shift byte3 to bits 31:24
+    slli    x26, x26, 16       # Shift byte2 to bits 23:16
+    slli    x24, x24, 8        # Shift byte1 to bits 15:8
+    or      x25, x25, x24      # x25 = byte0 | (byte1 << 8)
+    or      x25, x25, x26      # x25 |= (byte2 << 16)
+    or      x25, x25, x5       # x25 现在包含完整的 32 位值
 
     # --- 更新目的寄存器的值 ---
-    li      t5, 0
-    beq     t4, t5, misaligned_done  # rd == x0？跳过
-    li      t5, 2
-    beq     t4, t5, misaligned_done  # rd == x2 (sp)？跳过
+    li      x30, 0
+    beq     x29, x30, misaligned_done  # rd == x0？跳过
+    li      x30, 2
+    beq     x29, x30, misaligned_done  # rd == x2 (sp)？跳过
 
     # 计算 rd 在保存区的偏移量
-    addi    t5, t4, -1
-    slli    t5, t5, 2         # 偏移量 = (rd-1) * 4
-    add     t5, sp, t5
-    sw      t7, 0(t5)         # 写回保存的寄存器
+    addi    x30, x29, -1
+    slli    x30, x30, 2        # 偏移量 = (rd-1) * 4
+    add     x30, sp, x30
+    sw      x25, 0(x30)        # 写回保存的寄存器
 
 misaligned_done:
     # --- 跳过 lw 指令 ---
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
+    csrr    x5, mepc
+    addi    x5, x5, 4
+    csrw    mepc, x5
 
     # --- 恢复所有寄存器 ---
-    lw      t6, 124(sp)
-    lw      t5, 120(sp)
-    lw      t4, 116(sp)
-    lw      t3, 112(sp)
-    lw      s11,108(sp)
-    lw      s10,104(sp)
-    lw      s9, 100(sp)
-    lw      s8, 96(sp)
-    lw      s7, 92(sp)
-    lw      s6, 88(sp)
-    lw      s5, 84(sp)
-    lw      s4, 80(sp)
-    lw      s3, 76(sp)
-    lw      s2, 72(sp)
-    lw      a7, 68(sp)
-    lw      a6, 64(sp)
-    lw      a5, 60(sp)
-    lw      a4, 56(sp)
-    lw      a3, 52(sp)
-    lw      a2, 48(sp)
-    lw      a1, 44(sp)
-    lw      a0, 40(sp)
-    lw      s1, 36(sp)
-    lw      s0, 32(sp)
-    lw      t2, 28(sp)
-    lw      t1, 24(sp)
-    lw      t0, 20(sp)
-    lw      tp, 16(sp)
-    lw      gp, 12(sp)
-    lw      sp,  8(sp)
-    lw      ra,  4(sp)
-    lw      x0,  0(sp)
+    lw      x31, 124(sp)
+    lw      x30, 120(sp)
+    lw      x29, 116(sp)
+    lw      x28, 112(sp)
+    lw      x27, 108(sp)
+    lw      x26, 104(sp)
+    lw      x25, 100(sp)
+    lw      x24, 96(sp)
+    lw      x23, 92(sp)
+    lw      x22, 88(sp)
+    lw      x21, 84(sp)
+    lw      x20, 80(sp)
+    lw      x19, 76(sp)
+    lw      x18, 72(sp)
+    lw      x17, 68(sp)
+    lw      x16, 64(sp)
+    lw      x15, 60(sp)
+    lw      x14, 56(sp)
+    lw      x13, 52(sp)
+    lw      x12, 48(sp)
+    lw      x11, 44(sp)
+    lw      x10, 40(sp)
+    lw      x9, 36(sp)
+    lw      x8, 32(sp)
+    lw      x7, 28(sp)
+    lw      x6, 24(sp)
+    lw      x5, 20(sp)
+    lw      x4, 16(sp)
+    lw      x3, 12(sp)
+    lw      x2, 8(sp)
+    lw      x1, 4(sp)
+    lw      x0, 0(sp)
     addi    sp, sp, 128
 
-    csrr    t8, mscratch
+    csrr    x24, mscratch
     csrw    mscratch, sp
-    mv      sp, t8
+    mv      sp, x24
 
-    mret                    # 返回用户态
+    mret
+
 
 call_terminate:
     j       terminate
