@@ -129,167 +129,172 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 __mtrap:
-    ########################################################################
-    # 1. 切换到内核栈 (mscratch) 并保存所有 32 个通用寄存器
-    ########################################################################
-    # 1a) 交换 sp 与 mscratch，使 sp 指向内核栈顶
+########################################################################
+# 1. 切换到内核栈 (mscratch) 并保存所有 32 个通用寄存器
+########################################################################
+# 1a) 交换 sp 与 mscratch，使 sp 指向内核栈顶
     csrrw   sp, mscratch, sp
 
-    # 1b) 在内核栈上开辟 128 字节空间，用于保存 x0..x31
+# 1b) 在内核栈上开辟 128 字节空间，用于保存 x0..x31
     addi    sp, sp, -128
 
-    # 1c) 依次将 x0..x31 保存在栈中，每个寄存器占 4 字节
-    #     约定: xN 存放在 [sp + 4*N] 中。
-    sw      x0,   0(sp)    # x0  --恒为0，存不存都可以
-    sw      x1,   4(sp)    # x1 (ra)
-    sw      x2,   8(sp)    # x2 (sp)
-    sw      x3,   12(sp)   # x3 (gp)
-    sw      x4,   16(sp)   # x4 (tp)
-    sw      x5,   20(sp)   # x5 (t0)
-    sw      x6,   24(sp)   # x6 (t1)
-    sw      x7,   28(sp)   # x7 (t2)
-    sw      x8,   32(sp)   # x8 (s0 / fp)
-    sw      x9,   36(sp)   # x9 (s1)
-    sw      x10,  40(sp)   # a0
-    sw      x11,  44(sp)   # a1
-    sw      x12,  48(sp)   # a2
-    sw      x13,  52(sp)   # a3
-    sw      x14,  56(sp)   # a4
-    sw      x15,  60(sp)   # a5
-    sw      x16,  64(sp)   # a6
-    sw      x17,  68(sp)   # a7
-    sw      x18,  72(sp)   # s2
-    sw      x19,  76(sp)   # s3
-    sw      x20,  80(sp)   # s4
-    sw      x21,  84(sp)   # s5
-    sw      x22,  88(sp)   # s6
-    sw      x23,  92(sp)   # s7
-    sw      x24,  96(sp)   # s8
-    sw      x25,  100(sp)  # s9
-    sw      x26,  104(sp)  # s10
-    sw      x27,  108(sp)  # s11
-    sw      x28,  112(sp)  # t3
-    sw      x29,  116(sp)  # t4
-    sw      x30,  120(sp)  # t5
-    sw      x31,  124(sp)  # t6
+# 1c) 依次将 x0..x31 保存在栈中，每个寄存器占 4 字节
+# 约定: xN 存放在 [sp + 4*N] 中。
+    sw      x0, 0(sp)                                                         # x0 --恒为0，存不存都可以
+    sw      x1, 4(sp)                                                         # x1 (ra)
+    sw      x2, 8(sp)                                                         # x2 (sp)
+    sw      x3, 12(sp)                                                        # x3 (gp)
+    sw      x4, 16(sp)                                                        # x4 (tp)
+    sw      x5, 20(sp)                                                        # x5 (t0)
+    sw      x6, 24(sp)                                                        # x6 (t1)
+    sw      x7, 28(sp)                                                        # x7 (t2)
+    sw      x8, 32(sp)                                                        # x8 (s0 / fp)
+    sw      x9, 36(sp)                                                        # x9 (s1)
+    sw      x10, 40(sp)                                                       # a0
+    sw      x11, 44(sp)                                                       # a1
+    sw      x12, 48(sp)                                                       # a2
+    sw      x13, 52(sp)                                                       # a3
+    sw      x14, 56(sp)                                                       # a4
+    sw      x15, 60(sp)                                                       # a5
+    sw      x16, 64(sp)                                                       # a6
+    sw      x17, 68(sp)                                                       # a7
+    sw      x18, 72(sp)                                                       # s2
+    sw      x19, 76(sp)                                                       # s3
+    sw      x20, 80(sp)                                                       # s4
+    sw      x21, 84(sp)                                                       # s5
+    sw      x22, 88(sp)                                                       # s6
+    sw      x23, 92(sp)                                                       # s7
+    sw      x24, 96(sp)                                                       # s8
+    sw      x25, 100(sp)                                                      # s9
+    sw      x26, 104(sp)                                                      # s10
+    sw      x27, 108(sp)                                                      # s11
+    sw      x28, 112(sp)                                                      # t3
+    sw      x29, 116(sp)                                                      # t4
+    sw      x30, 120(sp)                                                      # t5
+    sw      x31, 124(sp)                                                      # t6
 
-    ########################################################################
-    # 2. 检查是否为“misaligned load address”，并且指令是否是 lw
-    ########################################################################
-    # 2a) 读取 mcause，若 != 4 (misaligned load), 则跳转 terminate
+########################################################################
+# 2. 检查是否为“misaligned load address”，并且指令是否是 lw
+########################################################################
+# 2a) 读取 mcause，若 != 4 (misaligned load), 则跳转 terminate
     csrr    t0, mcause
     li      t1, 4
     bne     t0, t1, not_misaligned_lw
 
-    # 2b) 读取 mepc，取出所触发异常的指令
-    csrr    t1, mepc        # t1 = mepc
-    lw      t2, 0(t1)       # t2 = *mepc (取 32 位指令)
+# 2b) 读取 mepc，取出所触发异常的指令
+    csrr    t1, mepc                                                          # t1 = mepc
+    lw      t2, 0(t1)                                                         # t2 = *mepc (取 32 位指令)
 
-    # 2c) 检查 opcode（低 7 位）是否是 3 (load)，并且 funct3（位14..12）是否是 2 (lw)
-    #     opcode = t2[6:0]   => (t2 & 0x7F)
-    #     funct3 = t2[14:12] => ((t2 >> 12) & 0x7)
+# 2c) 检查 opcode（低 7 位）是否是 3 (load)，并且 funct3（位14..12）是否是 2 (lw)
+# opcode = t2[6: 0] => (t2 & 0x7F)
+# funct3 = t2[14: 12] => ((t2 >> 12) & 0x7)
     li      t3, 0x7F
-    and     t4, t2, t3      # t4 = 指令的最低7位
-    li      t5, 3           # opcode for loads
+    and     t4, t2, t3                                                        # t4 = 指令的最低7位
+    li      t5, 3                                                             # opcode for loads
     bne     t4, t5, not_misaligned_lw
 
-    srli    t4, t2, 12      # 取出 bits[14..12]
+    srli    t4, t2, 12                                                        # 取出 bits[14..12]
     li      t5, 7
-    and     t4, t4, t5      # t4 = funct3
-    li      t6, 2           # funct3 = 2 -> lw
+    and     t4, t4, t5                                                        # t4 = funct3
+    li      t6, 2                                                             # funct3 = 2 -> lw
     bne     t4, t6, not_misaligned_lw
 
-    ########################################################################
-    # 3. 若确认为 misaligned lw，则从 mtval 取地址，拼装加载 4 个字节
-    ########################################################################
-    # 3a) 提取目的寄存器 rd (bits [11..7])，用于后面把结果写到相应栈区
-    #     rd = (instruction >> 7) & 0x1F
+########################################################################
+# 3. 若确认为 misaligned lw，则从 mtval 取地址，拼装加载 4 个字节
+########################################################################
+# 3a) 提取目的寄存器 rd (bits [11..7])，用于后面把结果写到相应栈区
+# rd = (instruction >> 7) & 0x1F
     srli    t4, t2, 7
     li      t5, 0x1F
-    and     t4, t4, t5      # t4 = rd
+    and     t4, t4, t5                                                        # t4 = rd
 
-    # 3b) 读取 mtval，得到真正访问的地址
-    csrr    a1, mtval       # a1 = 触发 misaligned load 的地址
+# 3b) 读取 mtval，得到真正访问的地址
+    csrr    a1, mtval                                                         # a1 = 触发 misaligned load 的地址
 
-    # 3c) 依次加载 4 个字节，并拼成 32 位
-    #     a2 中最终放置完整 32 位数据
-    lbu     a2, 0(a1)       # 第1字节(最低8位)
+# 3c) 依次加载 4 个字节，并拼成 32 位
+# a2 中最终放置完整 32 位数据
+# a1 = 触发 misaligned load 的起始地址
+# a2 用来保存最终的 32 位结果
+# t5 作临时寄存器
+
+    lbu     a2, 0(a1)                                                         # 读最低地址字节, 直接放 a2 的低 8 位
     lbu     t5, 1(a1)
-    slli    a2, a2, 8
+    slli    t5, t5, 8                                                         # 第二个字节左移 8 位
     or      a2, a2, t5
 
     lbu     t5, 2(a1)
-    slli    a2, a2, 8
+    slli    t5, t5, 16                                                        # 第三个字节左移 16 位
     or      a2, a2, t5
 
     lbu     t5, 3(a1)
-    slli    a2, a2, 8
+    slli    t5, t5, 24                                                        # 第四个字节左移 24 位
     or      a2, a2, t5
 
-    # 3d) 将结果存入被保存的“rd”对应的栈位置(每个寄存器在栈的偏移 = 4*rd)
-    slli    t5, t4, 2       # t5 = 4*rd
+
+# 3d) 将结果存入被保存的“rd”对应的栈位置(每个寄存器在栈的偏移 = 4*rd)
+    slli    t5, t4, 2                                                         # t5 = 4*rd
     add     t5, t5, sp
     sw      a2, 0(t5)
 
-    # 3e) mepc += 4，让下一条指令继续执行
+# 3e) mepc += 4，让下一条指令继续执行
     csrr    t6, mepc
     addi    t6, t6, 4
     csrw    mepc, t6
 
-    # 若成功处理，后续继续恢复寄存器并返回
+# 若成功处理，后续继续恢复寄存器并返回
     j       restore_all
 
 not_misaligned_lw:
-    # 若既不是 misaligned load，或指令不是 lw，走默认 terminate
+# 若既不是 misaligned load，或指令不是 lw，走默认 terminate
     j       terminate
 
-    ########################################################################
-    # 4. 恢复所有寄存器，并 mret 返回到原先的程序
-    ########################################################################
+########################################################################
+# 4. 恢复所有寄存器，并 mret 返回到原先的程序
+########################################################################
 restore_all:
-    lw      x0,   0(sp)     # x0 (无实际意义)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,   12(sp)
-    lw      x4,   16(sp)
-    lw      x5,   20(sp)
-    lw      x6,   24(sp)
-    lw      x7,   28(sp)
-    lw      x8,   32(sp)
-    lw      x9,   36(sp)
-    lw      x10,  40(sp)
-    lw      x11,  44(sp)
-    lw      x12,  48(sp)
-    lw      x13,  52(sp)
-    lw      x14,  56(sp)
-    lw      x15,  60(sp)
-    lw      x16,  64(sp)
-    lw      x17,  68(sp)
-    lw      x18,  72(sp)
-    lw      x19,  76(sp)
-    lw      x20,  80(sp)
-    lw      x21,  84(sp)
-    lw      x22,  88(sp)
-    lw      x23,  92(sp)
-    lw      x24,  96(sp)
-    lw      x25,  100(sp)
-    lw      x26,  104(sp)
-    lw      x27,  108(sp)
-    lw      x28,  112(sp)
-    lw      x29,  116(sp)
-    lw      x30,  120(sp)
-    lw      x31,  124(sp)
+    lw      x0, 0(sp)                                                         # x0 (无实际意义)
+    lw      x1, 4(sp)
+    lw      x2, 8(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
 
     addi    sp, sp, 128
 
-    # 恢复原来的用户栈指针
+# 恢复原来的用户栈指针
     csrrw   sp, mscratch, sp
 
-    # 返回到异常/中断前现场，继续执行
+# 返回到异常/中断前现场，继续执行
     mret
 
-	
-  	
+
+
 
 
 # This code is taken from the default VRV system code. It prints out
