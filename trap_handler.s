@@ -187,8 +187,8 @@ handle_load:
     slli    t3, t3, 3         # 偏移量 * 8
 
     srl     t4, t1, t3        # 右移第一个 word
-    li      t7, 32
-    sub     t3, t7, t3
+    addi    t3, zero, 32      # VRV 不支持 li，改用 addi
+    sub     t3, t3, t3        # 计算左移位数
     sll     t5, t2, t3        # 左移第二个 word
     or      t4, t4, t5        # 组合最终值
 
@@ -214,7 +214,6 @@ done_offset:
     csrw    mepc, t0
 
 restore_regs:
-    # 恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   4(sp)
     lw      tp,   8(sp)
