@@ -131,16 +131,14 @@ __mstart:
 	
   	
 __mtrap:
-    # Swap sp and mscratch to get kernel stack
-    csrrw sp, mscratch, sp
+    # Swap SP and mscratch to get trap stack
+    csrrw sp, mscratch, sp 
 
-    # Decrement stack pointer to make space for all registers (31 * 4 = 124 bytes)
-    addi sp, sp, -124
-
-    # Save all registers x1-x31 (we include x0 for simplicity)
+    # Save all registers to preserve state
+    addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)
+    # sp (x2) is saved elsewhere
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -171,50 +169,48 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Get mcause and check if it's a misaligned load (cause 4)
+    # Check cause of trap
     csrr t0, mcause
-    li t1, 4
-    bne t0, t1, not_misaligned_load
+    li t1, 4                  # Load misaligned code
+    bne t0, t1, terminate     # If not misaligned load, terminate
 
-    # It's a misaligned load, get the instruction at mepc
-    csrr t0, mepc
-    lw t1, 0(t0)
+    # Get faulting instruction and decode
+    csrr t0, mepc             # Get instruction pointer
+    lw t1, 0(t0)              # Get instruction
+    
+    # Extract destination register (rd) field 
+    srli t2, t1, 7            # Shift right to get rd
+    andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Extract the destination register (rd) from instruction
-    # rd is bits 7-11 of instruction
-    li t2, 0xF80    # Mask for rd (bits 7-11)
-    and t3, t1, t2  # Extract rd bits
-    srli t3, t3, 7  # Shift right to get register number
+    # Get faulting address
+    csrr t3, mtval            # Get misaligned address
 
-    # Get the misaligned address from mtval
-    csrr t0, mtval
+    # Load individual bytes
+    lb t4, 0(t3)              # Load first byte
+    lb t5, 1(t3)              # Load second byte 
+    lb t6, 2(t3)              # Load third byte
+    lb a0, 3(t3)              # Load fourth byte
 
-    # Load 4 bytes individually and combine them
-    lb t4, 0(t0)    # First byte
-    lb t5, 1(t0)    # Second byte
-    slli t5, t5, 8
-    or t4, t4, t5
-    lb t5, 2(t0)    # Third byte
-    slli t5, t5, 16
-    or t4, t4, t5
-    lb t5, 3(t0)    # Fourth byte
-    slli t5, t5, 24
-    or t4, t4, t5
+    # Combine bytes
+    slli t5, t5, 8            # Shift second byte
+    slli t6, t6, 16           # Shift third byte  
+    slli a0, a0, 24           # Shift fourth byte
+    or t4, t4, t5             # Combine first and second
+    or t4, t4, t6             # Add third
+    or t4, t4, a0             # Add fourth to get final word
 
-    # Store result in the saved register location
-    slli t3, t3, 2  # Multiply register number by 4 for offset
-    add t3, sp, t3  # Add to stack pointer
-    sw t4, 0(t3)    # Store result in saved register location
+    # Store result in original destination register location
+    slli t2, t2, 2            # Multiply rd by 4 for offset
+    add t2, sp, t2            # Get stack location
+    sw t4, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
 
-    # Restore all registers
-    lw x0, 0(sp)
+    # Restore all registers 
     lw x1, 4(sp)
-    lw x2, 8(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
     lw x5, 20(sp)
@@ -244,20 +240,13 @@ __mtrap:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
+    addi sp, sp, 128
 
-    # Restore stack pointer and swap back mscratch
-    addi sp, sp, 124
+    # Restore original stack pointer
     csrrw sp, mscratch, sp
 
     # Return from trap
     mret
-
-not_misaligned_load:
-    # Restore stack pointer and swap back mscratch before jumping to terminate
-    addi sp, sp, 124
-    csrrw sp, mscratch, sp
-    j terminate
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
