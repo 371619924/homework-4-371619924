@@ -178,68 +178,54 @@ __mtrap:
     csrr t0, mepc             # Get instruction pointer
     lw t1, 0(t0)              # Get instruction
     
-    # Extract instruction fields
-    srli t2, t1, 7            # rd field
-    andi t2, t2, 0x1f         # Mask to get 5 bits destination register
-    
-    # Get misaligned address
+    # Extract destination register
+    srli t2, t1, 7            # Shift right to get rd
+    andi t2, t2, 0x1f         # Mask to get 5 bits
+
+    # Get misaligned address and word-aligned addresses
     csrr t3, mtval            # Get misaligned address
+    andi t4, t3, 0x3          # Get offset within word
+    andi t5, t3, -4           # Get word-aligned address
     
-    # Determine load type (signed/unsigned, byte/half/word)
-    srli t4, t1, 12           # funct3 field 
-    andi t4, t4, 0x7          # Mask funct3
+    # Load both aligned words that contain our data
+    lw t6, 0(t5)              # Load first word
+    lw a0, 4(t5)              # Load next word
+
+    # Calculate number of bits to shift based on offset
+    slli t4, t4, 3            # Convert byte offset to bits (multiply by 8)
     
-    # Align the address
-    andi t5, t3, 0x3          # Get offset within word
-    andi t6, t3, -4           # Get word-aligned address
-    
-    # Load both aligned words
-    lw a0, 0(t6)              # Load first word
-    lw a1, 4(t6)              # Load second word
-    
-    # Compute bit shift based on offset
-    slli t5, t5, 3            # Convert byte offset to bits (multiply by 8)
-    
-    # Combine words
-    srl a0, a0, t5            # Right shift first word by offset
-    li t0, 32                 # Bits in a word
-    sub t0, t0, t5            # Complementary shift
-    sll a1, a1, t0            # Left shift second word
-    or a0, a0, a1             # Combine the parts
-    
-    # Handle signed/unsigned loads
-    li t1, 0b000              # lb
-    li t1, 0b100              # lbu
-    li t1, 0b001              # lh
-    li t1, 0b101              # lhu
-    li t1, 0b010              # lw
-    
-    # Sign extend if signed load
-    beq t4, zero, sign_extend_byte     # lb
-    li t1, 0b100
-    beq t4, t1, done_load               # lbu
-    li t1, 0b001
-    beq t4, t1, sign_extend_half        # lh
-    li t1, 0b101
-    beq t4, t1, done_load               # lhu
-    
-    # lw: no sign extension needed
+    # Extract bytes from the aligned words
+    srl t6, t6, t4            # Right shift first word by offset
+    li t1, 32                 # Bits in a word
+    sub t1, t1, t4            # Calculate complementary shift
+    sll a0, a0, t1            # Left shift second word
+    or t6, t6, a0             # Combine the parts to get our value
+
+    # Determine load type based on funct3
+    srli a1, t1, 12           # Extract funct3
+    andi a1, a1, 0x7
+
+    # Sign extend if needed
+    li t0, 0                  # lb
+    beq a1, t0, sign_extend_byte
+    li t0, 1                  # lh
+    beq a1, t0, sign_extend_half
     j done_load
-    
+
 sign_extend_byte:
-    slli a0, a0, 24           # Shift left to position byte
-    srai a0, a0, 24           # Arithmetic right shift to sign extend
+    slli t6, t6, 24           # Shift left to position byte
+    srai t6, t6, 24           # Arithmetic right shift to sign extend
     j done_load
 
 sign_extend_half:
-    slli a0, a0, 16           # Shift left to position half-word
-    srai a0, a0, 16           # Arithmetic right shift to sign extend
+    slli t6, t6, 16           # Shift left to position half-word
+    srai t6, t6, 16           # Arithmetic right shift to sign extend
 
 done_load:
-    # Store result in destination register
-    slli t2, t2, 2            # Multiply rd by 4 for stack offset
-    add t2, sp, t2            # Get stack location for register
-    sw a0, 0(t2)              # Save result to register's stack location
+    # Store the result in the original destination register location
+    slli t2, t2, 2            # Multiply rd by 4 for offset
+    add t2, sp, t2            # Get stack location
+    sw t6, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -287,7 +273,7 @@ done_load:
     mret
     
 
-    
+
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
