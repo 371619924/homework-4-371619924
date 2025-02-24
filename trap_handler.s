@@ -132,13 +132,10 @@ __mstart:
   	
 .globl __mtrap
 __mtrap:
-    # 1. 交换 sp 与 mscratch，让 sp 指向内核栈
+    # 交换 sp 与 mscratch，进入内核栈
     csrrw   sp, mscratch, sp
-
-    # 2. 分配 128 字节保存 x0..x31（每个 4 字节，共 32 个寄存器）
+    # 分配 128 字节空间保存 x0～x31（每个寄存器 4 字节）
     addi    sp, sp, -128
-
-    # 按顺序依次保存 x0..x31
     sw      x0,   0(sp)
     sw      x1,   4(sp)
     sw      x2,   8(sp)
@@ -172,75 +169,73 @@ __mtrap:
     sw      x30,  120(sp)
     sw      x31,  124(sp)
 
-    # 3. 检查 mcause
+    # 检查 mcause：若为 4（misaligned load）或 5（load access fault），则处理
     csrr    t0, mcause
     li      t1, 4
-    beq     t0, t1, handle_load
+    beq     t0, t1, misaligned
     li      t1, 5
-    beq     t0, t1, handle_load
+    beq     t0, t1, misaligned
     j       trap_other
 
-handle_load:
-    # 如果 mepc=0，无法修补，直接终止
+misaligned:
+    # 获取触发异常的指令地址
     csrr    t0, mepc
-    beqz    t0, trap_other
+    beqz    t0, trap_other      # 若 mepc 为 0，则无法补丁
+    lw      t1, 0(t0)           # 取故障指令
 
-    # 取故障指令
-    lw      t1, 0(t0)
-
-    # 检查 opcode 是否为 0x03（load）
+    # 检查 opcode（位 [6:0]）是否为 0x03（load 指令）
     andi    t2, t1, 0x7F
     li      t3, 0x03
     bne     t2, t3, trap_other
 
-    # 提取 funct3（位 [14:12]），必须用 srli
+    # 提取 funct3（位 [14:12]），用 srli（逻辑右移，不扩展符号）
     srli    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 2
-    bne     t2, t3, trap_other  # 如果不是 lw (funct3=2)，跳走
+    li      t3, 2             # lw 的 funct3 应为 2
+    bne     t2, t3, trap_other
 
-    # 提取 rd（位 [11:7]），必须用 srli
+    # 提取目标寄存器号 rd（位 [11:7]）
     srli    t4, t1, 7
     andi    t4, t4, 0x1F
-    beqz    t4, skip_patch      # 如果 rd=0(x0)，写了也没意义，跳过
+    # 如果 rd 为 0（x0），补丁无意义，直接跳过补丁
+    beq     t4, zero, skip_patch
 
-    # 计算目标寄存器在 trap frame 中的地址：offset = 4 * rd
-    slli    t2, t4, 2
-    add     t2, sp, t2
-    mv      a7, t2
+    # 计算目标寄存器在 trap frame 中的保存地址：地址 = sp + (rd * 4)
+    slli    t5, t4, 2         # t5 = rd * 4
+    add     t5, sp, t5        # t5 指向保存该寄存器的槽
 
-    # 从 mtval 取故障地址
-    csrr    t5, mtval
-    # 可选：地址范围检查
-    li      t6, 0x1000
-    blt     t5, t6, trap_other
+    # 从 mtval 中取出故障访问地址
+    csrr    t6, mtval
+    # 可选：检查 mtval 是否合理（例如小于某阈值视为非法）
+    li      t7, 0x1000
+    blt     t6, t7, trap_other
 
-    # 用 lbu 逐字节拼出 32 位数据
-    lbu     t6, 0(t5)
-    addi    t0, t5, 1
-    lbu     t1, 0(t0)
-    addi    t0, t5, 2
-    lbu     t2, 0(t0)
-    addi    t0, t5, 3
-    lbu     t3, 0(t0)
+    # 用 lbu 连续加载 4 个字节，按小端顺序重构 32 位字
+    lbu     t0, 0(t6)         # byte0
+    addi    t1, t6, 1
+    lbu     t1, 0(t1)         # byte1
+    addi    t2, t6, 2
+    lbu     t2, 0(t2)         # byte2
+    addi    t3, t6, 3
+    lbu     t3, 0(t3)         # byte3
 
-    slli    t1, t1, 8
-    or      t6, t6, t1
-    slli    t2, t2, 16
-    or      t6, t6, t2
-    slli    t3, t3, 24
-    or      t6, t6, t3
+    slli    t1, t1, 8         # byte1 << 8
+    or      t0, t0, t1
+    slli    t2, t2, 16        # byte2 << 16
+    or      t0, t0, t2
+    slli    t3, t3, 24        # byte3 << 24
+    or      t0, t0, t3
 
-    # 写回目标寄存器对应的 trap frame 槽
-    sw      t6, 0(a7)
+    # 将重构的 32 位数据写入保存目标寄存器的 trap frame 槽
+    sw      t0, 0(t5)
 
 skip_patch:
-    # 跳过故障指令
+    # 更新 mepc，跳过 faulting 指令（lw 指令占 4 字节）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # 恢复 x0..x31
+    # 恢复 x0～x31 寄存器
     lw      x0,   0(sp)
     lw      x1,   4(sp)
     lw      x2,   8(sp)
@@ -273,15 +268,13 @@ skip_patch:
     lw      x29,  116(sp)
     lw      x30,  120(sp)
     lw      x31,  124(sp)
-
     addi    sp, sp, 128
 
-    # 将用户栈指针还回去
+    # 恢复用户 sp，再返回用户代码
     csrrw   sp, mscratch, sp
     mret
 
 trap_other:
-    # 不是我们要处理的异常，或者无法修补，跳转到默认终止
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     j       terminate
