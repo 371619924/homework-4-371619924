@@ -195,7 +195,8 @@ __mtrap:
 
     # 计算对齐地址和偏移
     andi t6, t5, 0x3    # 计算 misalignment 偏移
-    andi t7, t5, -4     # 计算对齐地址
+    li t6, -4          # ✅ 正确的方式
+    and t7, t5, t6     # 计算对齐地址
 
     # 按字节加载
     lb a0, 0(t7)        # 读取低字节
