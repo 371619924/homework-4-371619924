@@ -130,129 +130,133 @@ __mstart:
 
 	
   	
-.globl __mtrap
 __mtrap:
-    # 交换 sp 与 mscratch，使 sp 指向内核栈
-    csrrw   sp, mscratch, sp
+    # Swap sp and mscratch to get kernel stack
+    csrrw sp, mscratch, sp
 
-    # 为 trap frame 分配 120 字节空间，保存 x1, x3~x31
-    addi    sp, sp, -120
-    sw      ra,   0(sp)
-    sw      gp,   4(sp)
-    sw      tp,   8(sp)
-    sw      t0,  12(sp)
-    sw      t1,  16(sp)
-    sw      t2,  20(sp)
-    sw      s0,  24(sp)
-    sw      s1,  28(sp)
-    sw      a0,  32(sp)
-    sw      a1,  36(sp)
-    sw      a2,  40(sp)
-    sw      a3,  44(sp)
-    sw      a4,  48(sp)
-    sw      a5,  52(sp)
-    sw      a6,  56(sp)
-    sw      a7,  60(sp)
-    sw      s2,  64(sp)
-    sw      s3,  68(sp)
-    sw      s4,  72(sp)
-    sw      s5,  76(sp)
-    sw      s6,  80(sp)
-    sw      s7,  84(sp)
-    sw      s8,  88(sp)
-    sw      s9,  92(sp)
-    sw      s10, 96(sp)
-    sw      s11,100(sp)
-    sw      t3, 104(sp)
-    sw      t4, 108(sp)
-    sw      t5, 112(sp)
-    sw      t6, 116(sp)
+    # Decrement stack pointer to make space for all registers (31 * 8 = 248 bytes)
+    addi sp, sp, -248
 
-    # 检查异常代码
-    csrr    t0, mcause
-    li      t1, 4
-    beq     t0, t1, handle_load
-    j       trap_other
+    # Save all registers x1-x31 (we can include x0 for simplicity)
+    sd x0, 0(sp)
+    sd x1, 8(sp)
+    sd x2, 16(sp)
+    sd x3, 24(sp)
+    sd x4, 32(sp)
+    sd x5, 40(sp)
+    sd x6, 48(sp)
+    sd x7, 56(sp)
+    sd x8, 64(sp)
+    sd x9, 72(sp)
+    sd x10, 80(sp)
+    sd x11, 88(sp)
+    sd x12, 96(sp)
+    sd x13, 104(sp)
+    sd x14, 112(sp)
+    sd x15, 120(sp)
+    sd x16, 128(sp)
+    sd x17, 136(sp)
+    sd x18, 144(sp)
+    sd x19, 152(sp)
+    sd x20, 160(sp)
+    sd x21, 168(sp)
+    sd x22, 176(sp)
+    sd x23, 184(sp)
+    sd x24, 192(sp)
+    sd x25, 200(sp)
+    sd x26, 208(sp)
+    sd x27, 216(sp)
+    sd x28, 224(sp)
+    sd x29, 232(sp)
+    sd x30, 240(sp)
+    sd x31, 248(sp)
 
-handle_load:
-    csrr    t0, mepc
-    beqz    t0, trap_other
+    # Get mcause and check if it's a misaligned load (cause 4)
+    csrr t0, mcause
+    li t1, 4
+    bne t0, t1, not_misaligned_load
 
-    csrr    t5, mtval
-    andi    t6, t5, -4        # 计算对齐的地址
-    lw      t1, 0(t6)         # 读取第一个 word
-    lw      t2, 4(t6)         # 读取下一个 word
+    # It's a misaligned load, get the instruction at mepc
+    csrr t0, mepc
+    lw t1, 0(t0)
 
-    andi    t3, t5, 0x3       # 计算 misaligned 偏移
-    slli    t3, t3, 3         # 偏移量 * 8
+    # Extract the destination register (rd) from instruction
+    # rd is bits 7-11 of instruction
+    li t2, 0xF80    # Mask for rd (bits 7-11)
+    and t3, t1, t2  # Extract rd bits
+    srli t3, t3, 7  # Shift right to get register number
 
-    srl     t4, t1, t3        # 右移第一个 word
-    addi    t3, zero, 32      # VRV 不支持 li，改用 addi
-    sub     t3, t3, t3        # 计算左移位数
-    sll     t5, t2, t3        # 左移第二个 word
-    or      t4, t4, t5        # 组合最终值
+    # Get the misaligned address from mtval
+    csrr t0, mtval
 
-    csrr    t0, mepc
-    lw      t6, 0(t0)         # 取出指令
-    srli    t6, t6, 7         # 提取 rd（目标寄存器）
-    andi    t6, t6, 0x1F
-    beqz    t6, restore_regs  # 如果 rd=0，不存数据
+    # Load 4 bytes individually and combine them
+    lb t4, 0(t0)    # First byte
+    lb t5, 1(t0)    # Second byte
+    slli t5, t5, 8
+    or t4, t4, t5
+    lb t5, 2(t0)    # Third byte
+    slli t5, t5, 16
+    or t4, t4, t5
+    lb t5, 3(t0)    # Fourth byte
+    slli t5, t5, 24
+    or t4, t4, t5
 
-    li      t3, 2
-    beq     t6, t3, set_offset
-    addi    t3, t6, -2
-    slli    t3, t3, 2
-    j       done_offset
-set_offset:
-    li      t3, 0
-done_offset:
-    add     t3, sp, t3
-    sw      t4, 0(t3)         # 存入寄存器
+    # Store result in the saved register location
+    slli t3, t3, 3  # Multiply register number by 8 for offset
+    add t3, sp, t3  # Add to stack pointer
+    sd t4, 0(t3)    # Store result in saved register location
 
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
+    # Increment mepc to next instruction
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
 
-restore_regs:
-    lw      ra,   0(sp)
-    lw      gp,   4(sp)
-    lw      tp,   8(sp)
-    lw      t0,  12(sp)
-    lw      t1,  16(sp)
-    lw      t2,  20(sp)
-    lw      s0,  24(sp)
-    lw      s1,  28(sp)
-    lw      a0,  32(sp)
-    lw      a1,  36(sp)
-    lw      a2,  40(sp)
-    lw      a3,  44(sp)
-    lw      a4,  48(sp)
-    lw      a5,  52(sp)
-    lw      a6,  56(sp)
-    lw      a7,  60(sp)
-    lw      s2,  64(sp)
-    lw      s3,  68(sp)
-    lw      s4,  72(sp)
-    lw      s5,  76(sp)
-    lw      s6,  80(sp)
-    lw      s7,  84(sp)
-    lw      s8,  88(sp)
-    lw      s9,  92(sp)
-    lw      s10, 96(sp)
-    lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
-    addi    sp, sp, 120
+    # Restore all registers
+    ld x0, 0(sp)
+    ld x1, 8(sp)
+    ld x2, 16(sp)
+    ld x3, 24(sp)
+    ld x4, 32(sp)
+    ld x5, 40(sp)
+    ld x6, 48(sp)
+    ld x7, 56(sp)
+    ld x8, 64(sp)
+    ld x9, 72(sp)
+    ld x10, 80(sp)
+    ld x11, 88(sp)
+    ld x12, 96(sp)
+    ld x13, 104(sp)
+    ld x14, 112(sp)
+    ld x15, 120(sp)
+    ld x16, 128(sp)
+    ld x17, 136(sp)
+    ld x18, 144(sp)
+    ld x19, 152(sp)
+    ld x20, 160(sp)
+    ld x21, 168(sp)
+    ld x22, 176(sp)
+    ld x23, 184(sp)
+    ld x24, 192(sp)
+    ld x25, 200(sp)
+    ld x26, 208(sp)
+    ld x27, 216(sp)
+    ld x28, 224(sp)
+    ld x29, 232(sp)
+    ld x30, 240(sp)
+    ld x31, 248(sp)
 
-    csrrw   sp, mscratch, sp
+    # Restore stack pointer and swap back mscratch
+    addi sp, sp, 248
+    csrrw sp, mscratch, sp
+
+    # Return from trap
     mret
 
-trap_other:
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    j       terminate
+not_misaligned_load:
+    # Restore stack pointer and swap back mscratch before jumping to terminate
+    addi sp, sp, 248
+    csrrw sp, mscratch, sp
+    j terminate
 
 
 
