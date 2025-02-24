@@ -185,21 +185,21 @@ __mtrap:
     # Get faulting address
     csrr t3, mtval            # Get misaligned address
 
-    # Load individual bytes
-    lb t4, 0(t3)              # Load first byte
-    lb t5, 1(t3)              # Load second byte 
-    lb t6, 2(t3)              # Load third byte
-    lb a0, 3(t3)              # Load fourth byte
+    # Load individual bytes with sign extension
+    lbu t4, 0(t3)             # Load first byte
+    lbu t5, 1(t3)             # Load second byte 
+    lbu t6, 2(t3)             # Load third byte
+    lb a0, 3(t3)              # Load fourth byte with sign extension
 
     # Combine bytes
     slli t5, t5, 8            # Shift second byte
     slli t6, t6, 16           # Shift third byte  
-    slli a0, a0, 24           # Shift fourth byte
+    slli a0, a0, 24           # Shift fourth byte with sign
     or t4, t4, t5             # Combine first and second
     or t4, t4, t6             # Add third
     or t4, t4, a0             # Add fourth to get final word
 
-    # Store result in original destination register location
+    # Calculate memory location for result
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
     sw t4, 0(t2)              # Save result
@@ -247,6 +247,8 @@ __mtrap:
 
     # Return from trap
     mret
+
+    
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
