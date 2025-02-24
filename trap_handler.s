@@ -185,21 +185,27 @@ __mtrap:
     # Get faulting address
     csrr t3, mtval            # Get misaligned address
 
-    # Load individual bytes with sign extension
-    lbu t4, 0(t3)             # Load first byte
-    lbu t5, 1(t3)             # Load second byte 
-    lbu t6, 2(t3)             # Load third byte
-    lb a0, 3(t3)              # Load fourth byte with sign extension
+    # Check instruction opcode for lw
+    andi t5, t1, 0x7f         # Extract opcode
+    li t6, 0x03               # lw opcode
+    bne t5, t6, terminate     # If not lw, terminate
 
-    # Combine bytes
-    slli t5, t5, 8            # Shift second byte
-    slli t6, t6, 16           # Shift third byte  
-    slli a0, a0, 24           # Shift fourth byte with sign
-    or t4, t4, t5             # Combine first and second
-    or t4, t4, t6             # Add third
-    or t4, t4, a0             # Add fourth to get final word
+    # Load individual bytes with sign extension for little-endian
+    lbu t4, 3(t3)             # Load highest byte unsigned
+    lbu t5, 2(t3)             # Load second-highest byte 
+    lbu t6, 1(t3)             # Load second-lowest byte
+    lb a0, 0(t3)              # Load lowest byte with sign extension
 
-    # Calculate memory location for result
+    # Combine bytes for little-endian
+    slli t4, t4, 24           # Position highest byte
+    slli t5, t5, 16           # Position second-highest byte
+    slli t6, t6, 8            # Position second-lowest byte
+    andi a0, a0, 0xff         # Mask lowest byte
+    or t4, t4, t5             # Combine highest bytes
+    or t4, t4, t6             # Add second-lowest byte
+    or t4, t4, a0             # Add lowest byte to get final word
+
+    # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
     sw t4, 0(t2)              # Save result
@@ -248,7 +254,7 @@ __mtrap:
     # Return from trap
     mret
 
-    
+
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
