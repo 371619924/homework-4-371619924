@@ -163,10 +163,10 @@ __mtrap:
     sw      s9,  92(sp)
     sw      s10, 96(sp)
     sw      s11,100(sp)
-    sw      t3,104(sp)
-    sw      t4,108(sp)
-    sw      t5,112(sp)
-    sw      t6,116(sp)
+    sw      t3, 104(sp)
+    sw      t4, 108(sp)
+    sw      t5, 112(sp)
+    sw      t6, 116(sp)
 
     # 检查异常代码
     csrr    t0, mcause
@@ -189,8 +189,8 @@ handle_load:
     slli    t3, t3, 3
     srl     t1, t1, t3
 
-    li      t7, 32
-    sub     t3, t7, t3
+    addi    t4, zero, 32  # VRV 不支持 li，改用 addi
+    sub     t3, t4, t3    # 计算剩余位数
     sll     t2, t2, t3
     or      t1, t1, t2
 
@@ -245,10 +245,10 @@ restore_regs:
     lw      s9,  92(sp)
     lw      s10, 96(sp)
     lw      s11,100(sp)
-    lw      t3,104(sp)
-    lw      t4,108(sp)
-    lw      t5,112(sp)
-    lw      t6,116(sp)
+    lw      t3, 104(sp)
+    lw      t4, 108(sp)
+    lw      t5, 112(sp)
+    lw      t6, 116(sp)
     addi    sp, sp, 120
 
     csrrw   sp, mscratch, sp
@@ -258,6 +258,7 @@ trap_other:
     addi    sp, sp, 120
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 
