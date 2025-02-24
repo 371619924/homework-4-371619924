@@ -182,20 +182,20 @@ __mtrap:
     # 检查 opcode（低 7 位）是否为 0x03（load 指令）
     andi    t2, t1, 0x7F
     li      t3, 0x03
-    bne     t2, t3, trap_other
+    bne     t2, t3, terminate
 
     # 检查 funct3（位 14:12）是否为 0x2（lw 指令）
     srai    t2, t1, 12
     andi    t2, t2, 0x7
     li      t3, 0x2
-    bne     t2, t3, trap_other
+    bne     t2, t3, terminate
 
     # 提取目标寄存器号 rd（位 11:7）
     srai    t4, t1, 7
     andi    t4, t4, 0x1F   # t4 = rd
-    beq     t4, zero, trap_other    # 若 rd 为 0，不补丁
+    beq     t4, zero, terminate   # 若 rd 为 0，不补丁
     li      t2, 2
-    beq     t4, t2, trap_other      # 若 rd 为 sp (x2)，不处理
+    beq     t4, t2, terminate     # 若 rd 为 sp (x2)，不处理
     li      t2, 1
     beq     t4, t2, update_offset
     addi    t2, t4, -2
@@ -271,10 +271,6 @@ done_offset:
 
     mret
 
-trap_other:
-    addi    sp, sp, 120
-    csrrw   sp, mscratch, sp
-    j       terminate
 
 
 # This code is taken from the default VRV system code. It prints out
