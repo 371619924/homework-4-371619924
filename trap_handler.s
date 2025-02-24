@@ -174,36 +174,36 @@ __mtrap:
     li t1, 4                  # Load misaligned code
     bne t0, t1, terminate     # If not misaligned load, terminate
 
-    # Get faulting instruction and extract destination register
+    # Get faulting instruction
     csrr t0, mepc             # Get instruction pointer
     lw t1, 0(t0)              # Get instruction
+    
+    # Extract destination register
     srli t2, t1, 7            # Shift right to get rd
     andi t2, t2, 0x1f         # Mask to get 5 bits
 
-    # Get misaligned address and verify instruction
+    # Get misaligned address
     csrr t3, mtval            # Get misaligned address
-    andi t4, t1, 0x7f         # Extract opcode
-    li t5, 0x03               # lw opcode
-    bne t4, t5, terminate     # If not lw, terminate
 
-    # Load bytes in the correct order for word reconstruction
-    lbu t4, 0(t3)             # Load lowest byte
-    lbu t5, 1(t3)             # Load second byte
-    lbu t6, 2(t3)             # Load third byte
-    lb a0, 3(t3)              # Load highest byte with sign extension
+    # Load bytes in reverse order to match expected word format
+    lbu t4, 3(t3)             # Load highest byte
+    lbu t5, 2(t3)             # Load second highest byte
+    lbu t6, 1(t3)             # Load second lowest byte
+    lb a0, 0(t3)              # Load lowest byte with sign extension
 
     # Construct word in proper order
-    slli t5, t5, 8            # Position second byte
-    slli t6, t6, 16           # Position third byte
-    slli a0, a0, 24           # Position highest byte with sign
-    or t4, t4, t5             # Combine first and second bytes
-    or t4, t4, t6             # Add third byte
-    or t4, t4, a0             # Add highest byte with sign
+    mv t1, a0                 # Start with lowest byte
+    slli t6, t6, 8            # Position second lowest byte
+    slli t5, t5, 16           # Position second highest byte
+    slli t4, t4, 24           # Position highest byte
+    or t1, t1, t6             # Add second lowest byte
+    or t1, t1, t5             # Add second highest byte
+    or t1, t1, t4             # Add highest byte
 
     # Store result in original destination register location
     slli t2, t2, 2            # Multiply rd by 4 for offset
     add t2, sp, t2            # Get stack location
-    sw t4, 0(t2)              # Save result
+    sw t1, 0(t2)              # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -249,7 +249,6 @@ __mtrap:
     # Return from trap
     mret
 
-    
     
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
