@@ -129,6 +129,7 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
 ### Trap handler
+
 __mtrap:
 # Swap SP and mscratch to get kernel stack
     csrrw   sp, mscratch, sp
@@ -191,46 +192,16 @@ __mtrap:
     mv      a7, a1
 
     csrr    t6, mtval
-    andi    t1, t6, 0x3                                                       # 计算 misaligned 地址的偏移（t6 & 3）
-    sub     t6, t6, t1                                                        # 计算对齐的地址（对齐到 4 字节边界）
 
-    lw      t2, 0(t6)                                                         # 读取对齐地址的数据
-    lw      t3, 4(t6)                                                         # 读取下一个对齐地址的数据（如果需要）
+    lhu     t0, 0(t6)                                                         # 低 16 位
+    lhu     t1, 2(t6)                                                         # 高 16 位
+    slli    t1, t1, 16                                                        # 高 16 位左移
+    or      t0, t0, t1                                                        # 合并成完整 32 位数据
 
-    beqz    t1, fix_misaligned
-    li      t4, 1
-    beq     t1, t4, misaligned_offset_1
-    li      t4, 2
-    beq     t1, t4, misaligned_offset_2
-    li      t4, 3
-    beq     t1, t4, misaligned_offset_3
-
-fix_misaligned:
-    mv      t0, t2                                                            # 数据已经对齐
-    j       store_fixed_value
-
-misaligned_offset_1:
-    srli    t4, t2, 8                                                         # 低 8 位丢弃
-    slli    t5, t3, 24                                                        # 高 24 位补上
-    or      t0, t4, t5                                                        # 合并数据
-    j       store_fixed_value
-
-misaligned_offset_2:
-    srli    t4, t2, 16                                                        # 低 16 位丢弃
-    slli    t5, t3, 16                                                        # 高 16 位补上
-    or      t0, t4, t5                                                        # 合并数据
-    j       store_fixed_value
-
-misaligned_offset_3:
-    srli    t4, t2, 24                                                        # 低 24 位丢弃
-    slli    t5, t3, 8                                                         # 高 8 位补上
-    or      t0, t4, t5                                                        # 合并数据
-    j       store_fixed_value
-
-store_fixed_value:
-    slli    a1, a7, 2                                                         # 计算目标寄存器存储地址
-    add     a1, sp, a1
-    sw      t0, 0(a1)                                                         # 存储修复的数据
+# 符号扩展（确保与 VRV 代码完全一致）
+    srai    t1, t0, 31                                                        # 取符号位，复制到 t1 (0xFFFFFFFF 或 0x00000000)
+    slli    t1, t1, 16                                                        # 让 t1 变成高 16 位的符号扩展
+    or      t0, t0, t1                                                        # 合并符号扩展
 # 合并成完整 32 位数据
 
 # 计算目标地址：a1 = sp + (a7 << 2)
@@ -327,6 +298,9 @@ fail:
     csrrw   sp, mscratch, sp
 
     mret
+
+
+
 
 
 
