@@ -131,23 +131,23 @@ __mstart:
 
 ### Trap handler
 __mtrap:
-    # Swap SP and mscratch to get trap stack
+    # 1) 交换堆栈指针(sp) 和 mscratch, 让内核使用自己的栈
     csrrw   sp, mscratch, sp
 
     # ------------------------------------------------
-    # 1) Save ALL registers to preserve user state
+    # 2) 保存所有寄存器到内核栈 (128字节 = 32个寄存器 * 4字节)
     # ------------------------------------------------
     addi    sp, sp, -128
-    sw      x0, 0(sp)
-    sw      x1, 4(sp)
-    sw      x2, 8(sp)    # Save sp (x2)
-    sw      x3, 12(sp)
-    sw      x4, 16(sp)
-    sw      x5, 20(sp)
-    sw      x6, 24(sp)
-    sw      x7, 28(sp)
-    sw      x8, 32(sp)
-    sw      x9, 36(sp)
+    sw      x0,  0(sp)
+    sw      x1,  4(sp)
+    sw      x2,  8(sp)    # Save sp (x2)
+    sw      x3,  12(sp)
+    sw      x4,  16(sp)
+    sw      x5,  20(sp)
+    sw      x6,  24(sp)
+    sw      x7,  28(sp)
+    sw      x8,  32(sp)
+    sw      x9,  36(sp)
     sw      x10, 40(sp)
     sw      x11, 44(sp)
     sw      x12, 48(sp)
@@ -172,68 +172,73 @@ __mtrap:
     sw      x31, 124(sp)
 
     # ------------------------------------------------
-    # 2) Check the cause of trap
+    # 3) 检查 trap 原因 (mcause)
+    #    如果不是“misaligned load”就去 terminate
     # ------------------------------------------------
     csrr    t0, mcause
-    li      t1, 4                # 4 = "misaligned load" cause
-    bne     t0, t1, terminate    # If not misaligned load, go terminate
+    li      t1, 4                 # 4 = misaligned load
+    bne     t0, t1, terminate
 
     # ------------------------------------------------
-    # 3) We *do* have a misaligned load:
-    #    - figure out which register (rd) to update
-    #    - read 4 bytes from the misaligned address
-    #    - combine them into a 32-bit word
-    #    - store result into that rd's save slot
+    # 4) 处理 misaligned load:
+    #    - 读取 faulting 指令获取 rd
+    #    - 从 mtval 获取错位地址
+    #    - 用 lb+andi 读4字节组合成32位
+    #    - 写回到对应的寄存器保存区
+    #    - mepc += 4 跳过故障指令
     # ------------------------------------------------
 
-    # (a) Read faulting instruction at MEPC to find rd
-    csrr    t0, mepc
-    lw      t1, 0(t0)            # The faulting instruction
-    # Instruction format for 'lw' is:  opcode[6:0] | rd[11:7] | ...
-    # so rd is bits [11:7]. We'll shift right by 7, then mask:
+    # 4a) 读取故障指令, 获取 rd
+    csrr    t0, mepc           # t0 = 指令地址
+    lw      t1, 0(t0)          # t1 = faulting 指令 (lw)
+    # lw 格式: opcode[6:0] | rd[11:7] | rs1[19:15] | imm[31:20] ...
+    # rd = (指令 >> 7) & 0x1F
     srli    t2, t1, 7
-    andi    t2, t2, 0x1f         # t2 now has the rd register number
+    andi    t2, t2, 0x1F       # t2 现在是 rd
 
-    # (b) Get the misaligned address from MTVAL
-    csrr    t3, mtval
+    # 4b) 获取错位地址
+    csrr    t3, mtval          # t3 = misaligned address
 
-    # (c) Load four bytes from that misaligned address
-    #     We’ll combine them into one 32-bit word in t4.
-    lbu     t4, 0(t3)            # byte0
-    lbu     t5, 1(t3)            # byte1
-    lbu     t6, 2(t3)            # byte2
-    lbu     t7, 3(t3)            # byte3
-
-    # Shift and OR them together: (lowest byte in t4, highest in t7)
+    # 4c) 依次读4字节 (使用 lb+andi 来 zero-extend)
+    lb      t4, 0(t3)          # byte0 (最低位)
+    andi    t4, t4, 0xFF
+    lb      t5, 1(t3)          # byte1
+    andi    t5, t5, 0xFF
     slli    t5, t5, 8
     or      t4, t4, t5
-    slli    t6, t6, 16
-    or      t4, t4, t6
-    slli    t7, t7, 24
-    or      t4, t4, t7
 
-    # (d) Write that 32-bit result into the saved location for rd
-    #     We already saved all regs at sp..(sp+128).
-    slli    t2, t2, 2            # multiply rd by 4 to get offset
+    lb      t5, 2(t3)          # byte2
+    andi    t5, t5, 0xFF
+    slli    t5, t5, 16
+    or      t4, t4, t5
+
+    lb      t5, 3(t3)          # byte3 (最高位)
+    andi    t5, t5, 0xFF
+    slli    t5, t5, 24
+    or      t4, t4, t5
+
+    # 4d) 写回到保存区
+    #     保存区起始 sp, 每个寄存器4字节, rd 对应偏移 = rd*4
+    slli    t2, t2, 2
     add     t2, sp, t2
     sw      t4, 0(t2)
 
-    # (e) Skip over the faulting 'lw' instruction by +4
+    # 4e) 跳过故障指令 (mepc += 4)
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     # ------------------------------------------------
-    # 4) Restore all registers and return from trap
+    # 5) 恢复所有寄存器, 然后 mret 返回
     # ------------------------------------------------
-    lw      x1, 4(sp)
-    lw      x3, 12(sp)
-    lw      x4, 16(sp)
-    lw      x5, 20(sp)
-    lw      x6, 24(sp)
-    lw      x7, 28(sp)
-    lw      x8, 32(sp)
-    lw      x9, 36(sp)
+    lw      x1,  4(sp)
+    lw      x3,  12(sp)
+    lw      x4,  16(sp)
+    lw      x5,  20(sp)
+    lw      x6,  24(sp)
+    lw      x7,  28(sp)
+    lw      x8,  32(sp)
+    lw      x9,  36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
@@ -258,11 +263,12 @@ __mtrap:
     lw      x31, 124(sp)
     addi    sp, sp, 128
 
-    # Restore original stack pointer from mscratch
+    # 恢复原始栈指针
     csrrw   sp, mscratch, sp
 
-    # Return from trap
+    # 从trap返回
     mret
+
 
 
 # This code is taken from the default VRV system code. It prints out
