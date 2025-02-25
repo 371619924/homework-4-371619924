@@ -172,6 +172,9 @@ __mtrap:
     li      t1, 4             # 4 表示 misaligned load
     bne     t0, t1, terminate
 
+    li     t1, 6               # 6 = misaligned store
+    beq    t0, t1, terminate
+
     # 4a) 读取故障指令，获取 rd
     csrr    t0, mepc          # t0 = 故障指令地址
     lw      t1, 0(t0)         # t1 = 故障指令 (lw)
