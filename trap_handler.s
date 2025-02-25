@@ -204,7 +204,7 @@ __mtrap:
 
 # 检查 a7 是否等于 2，若等于则更新 mscratch
     li      t0, 2
-    xori    t1, a7, t0                                                        # 如果 a7 == 2，则 t1 结果为 0
+    xor    t1, a7, t0                                                        # 如果 a7 == 2，则 t1 结果为 0
     bnez    t1, skip
     lw      t0, 8(sp)                                                         # 从 sp+8 处加载原始 sp
     csrw    mscratch, t0
