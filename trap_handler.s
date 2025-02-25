@@ -128,202 +128,145 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
+### Trap handler
 __mtrap:
-    # Swap kernel stack
-    csrrw   sp, mscratch, sp
-    
-    # Save registers
-    addi    sp, sp, -128
-    sw      ra,   4(sp)
-    sw      sp,   8(sp)
-    sw      gp,  12(sp)
-    sw      tp,  16(sp)
-    sw      t0,  20(sp)
-    sw      t1,  24(sp)
-    sw      t2,  28(sp)
-    sw      s0,  32(sp)
-    sw      s1,  36(sp)
-    sw      a0,  40(sp)
-    sw      a1,  44(sp)
-    sw      a2,  48(sp)
-    sw      a3,  52(sp)
-    sw      a4,  56(sp)
-    sw      a5,  60(sp)
-    sw      a6,  64(sp)
-    sw      a7,  68(sp)
-    sw      s2,  72(sp)
-    sw      s3,  76(sp)
-    sw      s4,  80(sp)
-    sw      s5,  84(sp)
-    sw      s6,  88(sp)
-    sw      s7,  92(sp)
-    sw      s8,  96(sp)
-    sw      s9, 100(sp)
-    sw      s10,104(sp)
-    sw      s11,108(sp)
-    sw      t3, 112(sp)
-    sw      t4, 116(sp)
-    sw      t5, 120(sp)
-    sw      t6, 124(sp)
-    
-    # Get trap cause
-    csrr    t0, mcause
-    li      t1, 4           # Load address fault
-    beq     t0, t1, handle_load
-    li      t1, 6           # Store address fault
-    beq     t0, t1, handle_store
-    j       terminate       # Other exceptions
-    
-handle_load:
-    # Get trapped instruction
-    csrr    t0, mepc
-    lw      t1, 0(t0)
-    
-    # Check opcode (0x03 for loads)
-    andi    t2, t1, 0x7F
-    li      t3, 0x03
-    bne     t2, t3, terminate
-    
-    # Extract funct3 (load type), rs1 (base reg), and rd (destination)
-    srli    t3, t1, 12
-    andi    t3, t3, 0x7     # funct3
-    srli    t4, t1, 15
-    andi    t4, t4, 0x1F    # rs1
-    srli    t5, t1, 7
-    andi    t5, t5, 0x1F    # rd
-    
-    # Get rs1 value from saved registers
-    slli    t6, t4, 2
-    add     t6, sp, t6
-    lw      t6, 0(t6)       # t6 = rs1 value
-    
-    # Get fault address from mtval CSR
-    csrr    t4, mtval
-    
-    # Handle based on load type (funct3)
-    li      t0, 2           # lw
-    beq     t3, t0, load_word
-    
-    # Add handlers for other load types if needed
-    j       terminate       # Default: unsupported load type
-    
-load_word:
-    # Load individual bytes from unaligned address
-    lbu     t0, 0(t4)
-    lbu     t1, 1(t4)
-    lbu     t2, 2(t4)
-    lbu     t3, 3(t4)
-    
-    # Combine bytes into a word (little-endian)
-    slli    t1, t1, 8
-    or      t0, t0, t1
-    slli    t2, t2, 16
-    or      t0, t0, t2
-    slli    t3, t3, 24
-    or      t0, t0, t3
-    
-    # Store result to destination register's saved location
-    slli    t1, t5, 2
-    add     t1, sp, t1
-    sw      t0, 0(t1)
-    
-    # If rd is sp (x2), update mscratch
-    li      t2, 2
-    bne     t5, t2, advance_pc
-    lw      t0, 8(sp)
-    csrw    mscratch, t0
-    j       advance_pc
-    
-handle_store:
-    # Get trapped instruction
-    csrr    t0, mepc
-    lw      t1, 0(t0)
-    
-    # Check opcode (0x23 for stores)
-    andi    t2, t1, 0x7F
-    li      t3, 0x23
-    bne     t2, t3, terminate
-    
-    # Extract funct3 (store type), rs1 (base reg), and rs2 (source)
-    srli    t3, t1, 12
-    andi    t3, t3, 0x7     # funct3
-    srli    t4, t1, 15
-    andi    t4, t4, 0x1F    # rs1
-    srli    t5, t1, 20
-    andi    t5, t5, 0x1F    # rs2
-    
-    # Get rs1 value from saved registers
-    slli    t6, t4, 2
-    add     t6, sp, t6
-    lw      t6, 0(t6)       # t6 = rs1 value
-    
-    # Get rs2 value from saved registers
-    slli    t4, t5, 2
-    add     t4, sp, t4
-    lw      t4, 0(t4)       # t4 = rs2 value (value to store)
-    
-    # Get fault address from mtval CSR
-    csrr    t5, mtval
-    
-    # Handle based on store type (funct3)
-    li      t0, 2           # sw
-    beq     t3, t0, store_word
-    
-    # Add handlers for other store types if needed
-    j       terminate       # Default: unsupported store type
-    
-store_word:
-    # Store individual bytes to unaligned address
-    sb      t4, 0(t5)       # Store lowest byte
-    srli    t0, t4, 8
-    sb      t0, 1(t5)       # Store second byte
-    srli    t0, t4, 16
-    sb      t0, 2(t5)       # Store third byte
-    srli    t0, t4, 24
-    sb      t0, 3(t5)       # Store highest byte
-    
-advance_pc:
-    # Advance to next instruction
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-    
-    # Restore registers
-    lw      ra,   4(sp)
-    # Skip sp for now
-    lw      gp,  12(sp)
-    lw      tp,  16(sp)
-    lw      t0,  20(sp)
-    lw      t1,  24(sp)
-    lw      t2,  28(sp)
-    lw      s0,  32(sp)
-    lw      s1,  36(sp)
-    lw      a0,  40(sp)
-    lw      a1,  44(sp)
-    lw      a2,  48(sp)
-    lw      a3,  52(sp)
-    lw      a4,  56(sp)
-    lw      a5,  60(sp)
-    lw      a6,  64(sp)
-    lw      a7,  68(sp)
-    lw      s2,  72(sp)
-    lw      s3,  76(sp)
-    lw      s4,  80(sp)
-    lw      s5,  84(sp)
-    lw      s6,  88(sp)
-    lw      s7,  92(sp)
-    lw      s8,  96(sp)
-    lw      s9, 100(sp)
-    lw      s10,104(sp)
-    lw      s11,108(sp)
-    lw      t3, 112(sp)
-    lw      t4, 116(sp)
-    lw      t5, 120(sp)
-    lw      t6, 124(sp)
-    
-    addi    sp, sp, 128
-    csrrw   sp, mscratch, sp
-    mret
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+csrrw sp, mscratch, sp
+
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+addi sp, sp, -128
+sw x0, 0(sp)
+sw x1, 4(sp)
+sw x2, 8(sp)    # Save sp (x2)
+sw x3, 12(sp)
+sw x4, 16(sp)
+sw x5, 20(sp)
+sw x6, 24(sp)
+sw x7, 28(sp)
+sw x8, 32(sp)
+sw x9, 36(sp)
+sw x10, 40(sp)
+sw x11, 44(sp)
+sw x12, 48(sp)
+sw x13, 52(sp)
+sw x14, 56(sp)
+sw x15, 60(sp)
+sw x16, 64(sp)
+sw x17, 68(sp)
+sw x18, 72(sp)
+sw x19, 76(sp)
+sw x20, 80(sp)
+sw x21, 84(sp)
+sw x22, 88(sp)
+sw x23, 92(sp)
+sw x24, 96(sp)
+sw x25, 100(sp)
+sw x26, 104(sp)
+sw x27, 108(sp)
+sw x28, 112(sp)
+sw x29, 116(sp)
+sw x30, 120(sp)
+sw x31, 124(sp)
+
+# 3) Check trap cause (mcause)
+# If not "misaligned load", go to terminate
+csrr t0, mcause
+li t1, 4    # 4 = misaligned load
+bne t0, t1, terminate
+
+# 4) Handle misaligned load:
+# First, read faulting instruction
+csrr t0, mepc         # t0 = instruction address
+lw t1, 0(t0)          # t1 = faulting instruction
+
+# 4a) Check if it's a load word instruction
+# Extract opcode and funct3
+andi t2, t1, 0x7F     # t2 = opcode (7 bits)
+li t3, 0x03           # lw opcode = 0x03 (0000011)
+bne t2, t3, terminate # Not a load instruction, terminate
+
+srli t4, t1, 12       # Shift right to get funct3 in position
+andi t4, t4, 0x7      # t4 = funct3 (3 bits)
+li t5, 0x2            # lw funct3 = 0x2 (010)
+bne t4, t5, terminate # Not a lw instruction, terminate
+
+# 4b) Get rd (destination register)
+srli t2, t1, 7
+andi t2, t2, 0x1F     # t2 now holds rd
+
+# 4c) Get misaligned address
+csrr t3, mtval        # t3 = misaligned address
+
+# 4d) Read 4 bytes sequentially (using lb+andi to zero-extend)
+lb t4, 0(t3)         # byte0 (lowest)
+andi t4, t4, 0xFF
+
+lb t5, 1(t3)         # byte1
+andi t5, t5, 0xFF
+slli t5, t5, 8
+or t4, t4, t5
+
+lb t5, 2(t3)         # byte2
+andi t5, t5, 0xFF
+slli t5, t5, 16
+or t4, t4, t5
+
+lb t5, 3(t3)         # byte3 (highest)
+andi t5, t5, 0xFF
+slli t5, t5, 24
+or t4, t4, t5
+
+# 4e) Write back to save area
+# Save area starts at sp, each register is 4 bytes, offset = rd*4
+slli t2, t2, 2
+add t2, sp, t2
+sw t4, 0(t2)
+
+# 4f) Skip faulting instruction (mepc += 4)
+csrr t0, mepc
+addi t0, t0, 4
+csrw mepc, t0
+
+# 5) Restore all registers, then mret return
+lw x1, 4(sp)
+lw x3, 12(sp)
+lw x4, 16(sp)
+lw x5, 20(sp)
+lw x6, 24(sp)
+lw x7, 28(sp)
+lw x8, 32(sp)
+lw x9, 36(sp)
+lw x10, 40(sp)
+lw x11, 44(sp)
+lw x12, 48(sp)
+lw x13, 52(sp)
+lw x14, 56(sp)
+lw x15, 60(sp)
+lw x16, 64(sp)
+lw x17, 68(sp)
+lw x18, 72(sp)
+lw x19, 76(sp)
+lw x20, 80(sp)
+lw x21, 84(sp)
+lw x22, 88(sp)
+lw x23, 92(sp)
+lw x24, 96(sp)
+lw x25, 100(sp)
+lw x26, 104(sp)
+lw x27, 108(sp)
+lw x28, 112(sp)
+lw x29, 116(sp)
+lw x30, 120(sp)
+lw x31, 124(sp)
+
+addi sp, sp, 128
+
+# Restore original stack pointer
+csrrw sp, mscratch, sp
+
+# Return from trap
+mret
+
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
