@@ -129,125 +129,140 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 
+### Trap handler
 __mtrap:
     # Swap SP and mscratch to get trap stack
-    csrrw sp, mscratch, sp
+    csrrw   sp, mscratch, sp
 
-    # Save all registers to preserve state
-    addi sp, sp, -128
-    sw x0, 0(sp)
-    sw x1, 4(sp)
-    sw x2, 8(sp)  # Save sp (x2)
-    sw x3, 12(sp)
-    sw x4, 16(sp)
-    sw x5, 20(sp)
-    sw x6, 24(sp)
-    sw x7, 28(sp)
-    sw x8, 32(sp)
-    sw x9, 36(sp)
-    sw x10, 40(sp)
-    sw x11, 44(sp)
-    sw x12, 48(sp)
-    sw x13, 52(sp)
-    sw x14, 56(sp)
-    sw x15, 60(sp)
-    sw x16, 64(sp)
-    sw x17, 68(sp)
-    sw x18, 72(sp)
-    sw x19, 76(sp)
-    sw x20, 80(sp)
-    sw x21, 84(sp)
-    sw x22, 88(sp)
-    sw x23, 92(sp)
-    sw x24, 96(sp)
-    sw x25, 100(sp)
-    sw x26, 104(sp)
-    sw x27, 108(sp)
-    sw x28, 112(sp)
-    sw x29, 116(sp)
-    sw x30, 120(sp)
-    sw x31, 124(sp)
+    # ------------------------------------------------
+    # 1) Save ALL registers to preserve user state
+    # ------------------------------------------------
+    addi    sp, sp, -128
+    sw      x0, 0(sp)
+    sw      x1, 4(sp)
+    sw      x2, 8(sp)    # Save sp (x2)
+    sw      x3, 12(sp)
+    sw      x4, 16(sp)
+    sw      x5, 20(sp)
+    sw      x6, 24(sp)
+    sw      x7, 28(sp)
+    sw      x8, 32(sp)
+    sw      x9, 36(sp)
+    sw      x10, 40(sp)
+    sw      x11, 44(sp)
+    sw      x12, 48(sp)
+    sw      x13, 52(sp)
+    sw      x14, 56(sp)
+    sw      x15, 60(sp)
+    sw      x16, 64(sp)
+    sw      x17, 68(sp)
+    sw      x18, 72(sp)
+    sw      x19, 76(sp)
+    sw      x20, 80(sp)
+    sw      x21, 84(sp)
+    sw      x22, 88(sp)
+    sw      x23, 92(sp)
+    sw      x24, 96(sp)
+    sw      x25, 100(sp)
+    sw      x26, 104(sp)
+    sw      x27, 108(sp)
+    sw      x28, 112(sp)
+    sw      x29, 116(sp)
+    sw      x30, 120(sp)
+    sw      x31, 124(sp)
 
-    # Check cause of trap
-    csrr t0, mcause
-    li t1, 4          # Load misaligned code
-    bne t0, t1, terminate    # If not misaligned load, terminate
+    # ------------------------------------------------
+    # 2) Check the cause of trap
+    # ------------------------------------------------
+    csrr    t0, mcause
+    li      t1, 4                # 4 = "misaligned load" cause
+    bne     t0, t1, terminate    # If not misaligned load, go terminate
 
-    # Get faulting instruction
-    csrr t0, mepc      # Get instruction pointer
-    lw t1, 0(t0)        # Get instruction
+    # ------------------------------------------------
+    # 3) We *do* have a misaligned load:
+    #    - figure out which register (rd) to update
+    #    - read 4 bytes from the misaligned address
+    #    - combine them into a 32-bit word
+    #    - store result into that rd's save slot
+    # ------------------------------------------------
 
-    # Extract destination register
-    srli t2, t1, 7      # Shift right to get rd
-    andi t2, t2, 0x1f    # Mask to get 5 bits
+    # (a) Read faulting instruction at MEPC to find rd
+    csrr    t0, mepc
+    lw      t1, 0(t0)            # The faulting instruction
+    # Instruction format for 'lw' is:  opcode[6:0] | rd[11:7] | ...
+    # so rd is bits [11:7]. We'll shift right by 7, then mask:
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1f         # t2 now has the rd register number
 
-    # Get misaligned address
-    csrr t3, mtval      # Get misaligned address
+    # (b) Get the misaligned address from MTVAL
+    csrr    t3, mtval
 
-    # Load bytes directly from misaligned address
-    lbu t4, 0(t3)        # Load first byte (unsigned)
-    lbu t5, 1(t3)        # Load second byte (unsigned)
-    lbu t6, 2(t3)        # Load third byte (unsigned)
-    lbu a0, 3(t3)        # Load fourth byte (unsigned)
+    # (c) Load four bytes from that misaligned address
+    #     We’ll combine them into one 32-bit word in t4.
+    lbu     t4, 0(t3)            # byte0
+    lbu     t5, 1(t3)            # byte1
+    lbu     t6, 2(t3)            # byte2
+    lbu     t7, 3(t3)            # byte3
 
-    # Reconstruct the word
-    slli t5, t5, 8      # Shift second byte
-    slli t6, t6, 16     # Shift third byte
-    slli a0, a0, 24     # Shift fourth byte
+    # Shift and OR them together: (lowest byte in t4, highest in t7)
+    slli    t5, t5, 8
+    or      t4, t4, t5
+    slli    t6, t6, 16
+    or      t4, t4, t6
+    slli    t7, t7, 24
+    or      t4, t4, t7
 
-    or t4, t4, t5       # Combine first and second bytes
-    or t4, t4, t6       # Add third byte
-    or t4, t4, a0       # Add fourth byte
+    # (d) Write that 32-bit result into the saved location for rd
+    #     We already saved all regs at sp..(sp+128).
+    slli    t2, t2, 2            # multiply rd by 4 to get offset
+    add     t2, sp, t2
+    sw      t4, 0(t2)
 
-    # Store the result in the original destination register location
-    slli t2, t2, 2      # Multiply rd by 4 for offset
-    add t2, sp, t2      # Get stack location
-    sw t4, 0(t2)        # Save result
+    # (e) Skip over the faulting 'lw' instruction by +4
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
 
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
+    # ------------------------------------------------
+    # 4) Restore all registers and return from trap
+    # ------------------------------------------------
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
+    addi    sp, sp, 128
 
-    # Restore all registers
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    addi sp, sp, 128
-
-    # Restore original stack pointer
-    csrrw sp, mscratch, sp
+    # Restore original stack pointer from mscratch
+    csrrw   sp, mscratch, sp
 
     # Return from trap
     mret
-
 
 
 # This code is taken from the default VRV system code. It prints out
