@@ -166,56 +166,105 @@ __mtrap:
     sw      t5, 120(sp)
     sw      t6, 124(sp)
     
-    # Check trap cause (fast path)
+    # Check trap cause
     csrr    t0, mcause
     li      t1, 4           # Load address fault
-    bne     t0, t1, terminate
+    beq     t0, t1, handle_load
+    li      t1, 6           # Store address fault
+    beq     t0, t1, handle_store
+    j       terminate       # Other exceptions
     
+handle_load:
     # Get trapped instruction
     csrr    t0, mepc
-    lw      t1, 0(t0)      
+    lw      t1, 0(t0)
     
-    # Check for lw (opcode 0x03, funct3 2)
-    andi    t2, t1, 0x7F    
-    li      t3, 0x03
+    # Check opcode
+    andi    t2, t1, 0x7F
+    li      t3, 0x03        # LOAD opcode
     bne     t2, t3, terminate
     
-    srli    t2, t1, 12      
-    andi    t2, t2, 0x7     
-    li      t3, 2
-    bne     t2, t3, terminate
-    
-    # Get destination register
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F    
+    # Extract funct3 and destination register
+    srli    t2, t1, 12
+    andi    t2, t2, 0x7     # funct3
+    srli    t3, t1, 7
+    andi    t3, t3, 0x1F    # rd
     
     # Get fault address and perform the load
-    csrr    t3, mtval
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
-    lbu     t6, 2(t3)
-    lbu     a0, 3(t3)
+    csrr    t4, mtval
+    
+    # Handle different load types based on funct3
+    li      t5, 2           # lw
+    beq     t2, t5, load_word
+    j       terminate       # Unsupported load type
+    
+load_word:
+    # Load individual bytes
+    lbu     t5, 0(t4)
+    lbu     t6, 1(t4)
+    lbu     a0, 2(t4)
+    lbu     a1, 3(t4)
     
     # Combine bytes
-    slli    t5, t5, 8
-    or      t4, t4, t5
-    slli    t6, t6, 16
-    or      t4, t4, t6
-    slli    a0, a0, 24
-    or      t4, t4, a0
+    slli    t6, t6, 8
+    or      t5, t5, t6
+    slli    a0, a0, 16
+    or      t5, t5, a0
+    slli    a1, a1, 24
+    or      t5, t5, a1
     
     # Store to destination register's saved location
-    slli    t5, t2, 2
-    add     t5, sp, t5
-    sw      t4, 0(t5)
+    slli    t6, t3, 2
+    add     t6, sp, t6
+    sw      t5, 0(t6)
     
     # Update mscratch if rd is sp
-    li      t6, 2
-    bne     t2, t6, skip_mscratch
-    lw      t4, 8(sp)
-    csrw    mscratch, t4
+    li      a0, 2
+    bne     t3, a0, advance_pc
+    lw      t5, 8(sp)
+    csrw    mscratch, t5
+    j       advance_pc
     
-skip_mscratch:
+handle_store:
+    # Get trapped instruction
+    csrr    t0, mepc
+    lw      t1, 0(t0)
+    
+    # Check opcode
+    andi    t2, t1, 0x7F
+    li      t3, 0x23        # STORE opcode
+    bne     t2, t3, terminate
+    
+    # Extract funct3, rs2, and base register
+    srli    t2, t1, 12
+    andi    t2, t2, 0x7     # funct3
+    srli    t3, t1, 20
+    andi    t3, t3, 0x1F    # rs2 (source)
+    
+    # Get fault address
+    csrr    t4, mtval
+    
+    # Handle different store types based on funct3
+    li      t5, 2           # sw
+    beq     t2, t5, store_word
+    j       terminate       # Unsupported store type
+    
+store_word:
+    # Get the value to store from rs2's saved location
+    slli    t5, t3, 2
+    add     t5, sp, t5
+    lw      t6, 0(t5)       # rs2 value
+    
+    # Store individual bytes
+    sb      t6, 0(t4)
+    srli    t6, t6, 8
+    sb      t6, 1(t4)
+    srli    t6, t6, 8
+    sb      t6, 2(t4)
+    srli    t6, t6, 8
+    sb      t6, 3(t4)
+    
+advance_pc:
     # Advance to next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
