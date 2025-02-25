@@ -190,16 +190,16 @@ handle_misaligned_load:
     csrr    t3, mtval  
 
     # 读取 4 字节数据并重组
-    lb      t4, 0(t3)
-    lb      t5, 1(t3)
+    lbu      t4, 0(t3)
+    lbu      t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lb      t5, 2(t3)
+    lbu      t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lb      t5, 3(t3)
+    lbu      t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
