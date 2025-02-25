@@ -128,126 +128,109 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 
+
+
 __mtrap:
-    # Swap SP and mscratch to get trap stack
-    csrrw sp, mscratch, sp
+    ################################################################
+    # 1) 切换到内核栈并保存所有寄存器
+    ################################################################
+    csrrw   sp, mscratch, sp
+    addi    sp, sp, -128
 
-    # Check cause of trap
-    csrr t0, mcause
-    li t1, 4          # Load misaligned code
-    bne t0, t1, terminate    # If not misaligned load, terminate
+    sw      x0,   0(sp)
+    sw      x1,   4(sp)
+    sw      x2,   8(sp)
+    sw      x3,   12(sp)
+    sw      x4,   16(sp)
+    sw      x5,   20(sp)
+    sw      x6,   24(sp)
+    sw      x7,   28(sp)
+    sw      x8,   32(sp)
+    sw      x9,   36(sp)
+    sw      x10,  40(sp)
+    sw      x11,  44(sp)
+    sw      x12,  48(sp)
+    sw      x13,  52(sp)
+    sw      x14,  56(sp)
+    sw      x15,  60(sp)
+    sw      x16,  64(sp)
+    sw      x17,  68(sp)
+    sw      x18,  72(sp)
+    sw      x19,  76(sp)
+    sw      x20,  80(sp)
+    sw      x21,  84(sp)
+    sw      x22,  88(sp)
+    sw      x23,  92(sp)
+    sw      x24,  96(sp)
+    sw      x25,  100(sp)
+    sw      x26,  104(sp)
+    sw      x27,  108(sp)
+    sw      x28,  112(sp)
+    sw      x29,  116(sp)
+    sw      x30,  120(sp)
+    sw      x31,  124(sp)
 
-    # Save all registers to preserve state
-    addi sp, sp, -128
-    sw x0, 0(sp)
-    sw x1, 4(sp)
-    sw x2, 8(sp)  # Save sp (x2)
-    sw x3, 12(sp)
-    sw x4, 16(sp)
-    sw x5, 20(sp)
-    sw x6, 24(sp)
-    sw x7, 28(sp)
-    sw x8, 32(sp)
-    sw x9, 36(sp)
-    sw x10, 40(sp)
-    sw x11, 44(sp)
-    sw x12, 48(sp)
-    sw x13, 52(sp)
-    sw x14, 56(sp)
-    sw x15, 60(sp)
-    sw x16, 64(sp)
-    sw x17, 68(sp)
-    sw x18, 72(sp)
-    sw x19, 76(sp)
-    sw x20, 80(sp)
-    sw x21, 84(sp)
-    sw x22, 88(sp)
-    sw x23, 92(sp)
-    sw x24, 96(sp)
-    sw x25, 100(sp)
-    sw x26, 104(sp)
-    sw x27, 108(sp)
-    sw x28, 112(sp)
-    sw x29, 116(sp)
-    sw x30, 120(sp)
-    sw x31, 124(sp)
+    ################################################################
+    # 2) 检查 mcause，判断是否为 misaligned load
+    ################################################################
+    csrr    t0, mcause
+    li      t1, 4                # 4 表示 misaligned load
+    bne     t0, t1, not_misaligned
 
-    
+    ################################################################
+    # 3) 如果是 misaligned load，执行修复逻辑
+    ################################################################
+    # 在此处放置你的修复代码（读取 mepc、指令、解析 rd、读取 mtval、组装正确值等）
+    # ...
+    # 之后跳转到恢复并返回用户态
+    j       restore_and_return
 
-    # Get faulting instruction
-    csrr t0, mepc      # Get instruction pointer
-    lw t1, 0(t0)        # Get instruction
+not_misaligned:
+    ################################################################
+    # 4) 如果不是 misaligned load，直接跳转 terminate
+    #    （terminate 不会返回，因此不需要恢复寄存器）
+    ################################################################
+    j       terminate
 
-    # Extract destination register
-    srli t2, t1, 7      # Shift right to get rd
-    andi t2, t2, 0x1f    # Mask to get 5 bits
+restore_and_return:
+    ################################################################
+    # 5) 恢复寄存器并返回用户态
+    ################################################################
+    lw      x1,   4(sp)
+    lw      x2,   8(sp)
+    lw      x3,   12(sp)
+    lw      x4,   16(sp)
+    lw      x5,   20(sp)
+    lw      x6,   24(sp)
+    lw      x7,   28(sp)
+    lw      x8,   32(sp)
+    lw      x9,   36(sp)
+    lw      x10,  40(sp)
+    lw      x11,  44(sp)
+    lw      x12,  48(sp)
+    lw      x13,  52(sp)
+    lw      x14,  56(sp)
+    lw      x15,  60(sp)
+    lw      x16,  64(sp)
+    lw      x17,  68(sp)
+    lw      x18,  72(sp)
+    lw      x19,  76(sp)
+    lw      x20,  80(sp)
+    lw      x21,  84(sp)
+    lw      x22,  88(sp)
+    lw      x23,  92(sp)
+    lw      x24,  96(sp)
+    lw      x25,  100(sp)
+    lw      x26,  104(sp)
+    lw      x27,  108(sp)
+    lw      x28,  112(sp)
+    lw      x29,  116(sp)
+    lw      x30,  120(sp)
+    lw      x31,  124(sp)
 
-    # Get misaligned address and word-aligned addresses
-    csrr t3, mtval      # Get misaligned address
-    andi t4, t3, 0x3     # Get offset within word (0-3)
-    andi t5, t3, -4      # Get word-aligned address (clear bottom 2 bits)
+    addi    sp, sp, 128
+    csrrw   sp, mscratch, sp     # 把 sp 换回原来的
 
-    # Load both aligned words that contain our data
-    lw t6, 0(t5)        # Load first word
-    lw a0, 4(t5)        # Load next word
-
-    # Calculate number of bits to shift based on offset
-    slli t4, t4, 3      # Convert byte offset to bits (multiply by 8)
-
-    # Extract bytes from the aligned words
-    srl t6, t6, t4      # Right shift first word by offset
-    li t1, 32           # Bits in a word
-    sub t1, t1, t4      # Calculate complementary shift
-    sll a0, a0, t1      # Left shift second word
-    or t6, t6, a0        # Combine the parts to get our value
-
-    # Store the result in the original destination register location
-    slli t2, t2, 2      # Multiply rd by 4 for offset
-    add t2, sp, t2      # Get stack location
-    sw t6, 0(t2)        # Save result
-
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-
-    # Restore all registers
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    addi sp, sp, 128
-
-    # Restore original stack pointer
-    csrrw sp, mscratch, sp
-
-    # Return from trap
     mret
 
 
