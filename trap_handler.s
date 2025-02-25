@@ -169,40 +169,49 @@ sw x29, 116(sp)
 sw x30, 120(sp)
 sw x31, 124(sp)
 
-# 3) Check trap cause (mcause) and ensure it's a misaligned load
+# 3) Check trap cause (mcause) 
 csrr t0, mcause
 li t1, 0x7FFFFFFF
 and t0, t0, t1
-li t1, 4
-bne t0, t1, terminate   # If not misaligned load, terminate
 
-# 4) Read faulting instruction and check if it's lw
+# Handle misaligned load (4) or store (6)
+li t2, 4
+beq t0, t2, handle_misaligned_load
+li t2, 6
+beq t0, t2, handle_misaligned_store
+
+terminate:
+    csrrw sp, mscratch, sp
+    li a0, -1
+    mret
+
+# 4) Read faulting instruction
+handle_misaligned_load:
 csrr t2, mepc
 lw t3, 0(t2)
 
 # Check opcode
 andi t4, t3, 0x7F
 li t5, 0x03
-bne t4, t5, terminate   # If opcode is not lw, terminate
+bne t4, t5, terminate  # If opcode is not load, terminate
 
-# Check funct3
+# Check funct3 for different load types
 srai t6, t3, 12
 andi t6, t6, 0x7
-li t5, 2
-bne t6, t5, terminate   # If funct3 is not for lw, terminate
 
 # Extract rd
 srli t2, t3, 7
-andi t2, t2, 0x1F     # rd = (instruction >> 7) & 0x1F
+andi t2, t2, 0x1F
 
 # Get misaligned address
-csrr t3, mtval        # t3 = misaligned address
+csrr t3, mtval
 
-# Read 4 bytes sequentially (lb + andi to zero-extend)
-lb t4, 0(t3)
-lb t5, 1(t3)
-lb t6, 2(t3)
-lb t1, 3(t3)
+# Read bytes
+lbu t4, 0(t3)
+lbu t5, 1(t3)
+lbu t6, 2(t3)
+lbu t1, 3(t3)
+
 slli t5, t5, 8
 slli t6, t6, 16
 slli t1, t1, 24
@@ -210,55 +219,45 @@ or t4, t4, t5
 or t4, t4, t6
 or t4, t4, t1
 
-# Write back to save area
+# Sign extend if necessary
+li t5, 1
+beq t6, t5, sign_extend_h
+li t5, 0
+beq t6, t5, sign_extend_b
+
+# Write back
 slli t2, t2, 2
 add t2, sp, t2
 sw t4, 0(t2)
 
-# Skip faulting instruction (mepc += 4)
+# Skip instruction
 csrr t0, mepc
 addi t0, t0, 4
 csrw mepc, t0
 
-# 5) Restore all registers, then mret return
+# Restore registers and return
+restore_registers:
 lw x1, 4(sp)
-lw x3, 12(sp)
-lw x4, 16(sp)
-lw x5, 20(sp)
-lw x6, 24(sp)
-lw x7, 28(sp)
-lw x8, 32(sp)
-lw x9, 36(sp)
-lw x10, 40(sp)
-lw x11, 44(sp)
-lw x12, 48(sp)
-lw x13, 52(sp)
-lw x14, 56(sp)
-lw x15, 60(sp)
-lw x16, 64(sp)
-lw x17, 68(sp)
-lw x18, 72(sp)
-lw x19, 76(sp)
-lw x20, 80(sp)
-lw x21, 84(sp)
-lw x22, 88(sp)
-lw x23, 92(sp)
-lw x24, 96(sp)
-lw x25, 100(sp)
-lw x26, 104(sp)
-lw x27, 108(sp)
-lw x28, 112(sp)
-lw x29, 116(sp)
-lw x30, 120(sp)
-lw x31, 124(sp)
-
 addi sp, sp, 128
-
-# Restore original stack pointer
 csrrw sp, mscratch, sp
-
-# Return from trap
 mret
+
+# Sign extend
+sign_extend_h:
+slli t4, t4, 16
+srai t4, t4, 16
+j restore_registers
+
+sign_extend_b:
+slli t4, t4, 24
+srai t4, t4, 24
+j restore_registers
+
+# Handle misaligned store (sh/sb/sw)
+handle_misaligned_store:
+# Add store fix here
+j terminate
+
 
 
 
