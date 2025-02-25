@@ -136,9 +136,8 @@ __mtrap:
 
 # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
-    sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x2, 8(sp)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -191,21 +190,21 @@ handle_misaligned_load:
     andi    t6, t3, 0x3    # 计算 misalignment 偏移量 (t6 = mtval % 4)
     sub     t3, t3, t6     # 计算对齐后的地址 (aligned_addr = mtval - (mtval % 4))
 
-    # **读取对齐后的 4 字节数据**
-    lbu     t4, 0(t3)  
-    lbu     t5, 1(t3)
+    # **使用 `lb` 以支持 `signed extension`**
+    lb      t4, 0(t3)  
+    lb      t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lbu     t5, 2(t3)
+    lb      t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lbu     t5, 3(t3)
+    lb      t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # **正确右移，使其与 `mtval` 偏移量对齐**
+    # **右移数据，使其与 `mtval` 偏移量对齐**
     slli    t6, t6, 3   # t6 = t6 * 8
     srl     t4, t4, t6  # 右移 t6 * 8 位
 
@@ -241,11 +240,7 @@ handle_misaligned_store:
     add     t4, sp, t4
     lw      t5, 0(t4)   # 取出 rs2 的值
 
-    # **正确调整存储位置**
-    slli    t6, t6, 3   # t6 = t6 * 8
-    srl     t5, t5, t6  # 右移 t6 * 8 位，使其对齐 `mtval`
-
-    # **拆分 32 位存储到 misaligned 地址**
+    # **调整存储字节位置**
     sb      t5, 0(t3)   
     srli    t5, t5, 8
     sb      t5, 1(t3)   
