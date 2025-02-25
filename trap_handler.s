@@ -129,35 +129,35 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
 exception_vector_entry:
-# Switch to kernel stack
+    # Switch to kernel stack
     csrrw   sp, mscratch, sp
-
-# Reserve stack space and save registers
+    
+    # Reserve stack space and save registers
     addi    sp, sp, -128
-    sw      ra, 4(sp)
-    sw      sp, 8(sp)
-    sw      gp, 12(sp)
-    sw      tp, 16(sp)
-    sw      t0, 20(sp)
-    sw      t1, 24(sp)
-    sw      t2, 28(sp)
-    sw      s0, 32(sp)
-    sw      s1, 36(sp)
-    sw      a0, 40(sp)
-    sw      a1, 44(sp)
-    sw      a2, 48(sp)
-    sw      a3, 52(sp)
-    sw      a4, 56(sp)
-    sw      a5, 60(sp)
-    sw      a6, 64(sp)
-    sw      a7, 68(sp)
-    sw      s2, 72(sp)
-    sw      s3, 76(sp)
-    sw      s4, 80(sp)
-    sw      s5, 84(sp)
-    sw      s6, 88(sp)
-    sw      s7, 92(sp)
-    sw      s8, 96(sp)
+    sw      ra,   4(sp)
+    sw      sp,   8(sp)
+    sw      gp,  12(sp)
+    sw      tp,  16(sp)
+    sw      t0,  20(sp)
+    sw      t1,  24(sp)
+    sw      t2,  28(sp)
+    sw      s0,  32(sp)
+    sw      s1,  36(sp)
+    sw      a0,  40(sp)
+    sw      a1,  44(sp)
+    sw      a2,  48(sp)
+    sw      a3,  52(sp)
+    sw      a4,  56(sp)
+    sw      a5,  60(sp)
+    sw      a6,  64(sp)
+    sw      a7,  68(sp)
+    sw      s2,  72(sp)
+    sw      s3,  76(sp)
+    sw      s4,  80(sp)
+    sw      s5,  84(sp)
+    sw      s6,  88(sp)
+    sw      s7,  92(sp)
+    sw      s8,  96(sp)
     sw      s9, 100(sp)
     sw      s10,104(sp)
     sw      s11,108(sp)
@@ -165,94 +165,97 @@ exception_vector_entry:
     sw      t4, 116(sp)
     sw      t5, 120(sp)
     sw      t6, 124(sp)
-
-# Get and check trap cause
+    
+    # Get and check trap cause
     csrr    t0, mcause
-    andi    t0, t0, 0x7FFFFFFF
-    li      t1, 4                                                             # Load address fault code
+    # Clear MSB using shift operations instead of andi with large immediate
+    srli    t0, t0, 1
+    slli    t0, t0, 1
+    
+    li      t1, 4               # Load address fault code
     bne     t0, t1, unhandled_exception_path
-
-# Get the faulting instruction
+    
+    # Get the faulting instruction
     csrr    t0, mepc
     lw      t1, 0(t0)
-
-# Verify it's a load word (lw) instruction
+    
+    # Verify it's a load word (lw) instruction
     andi    t2, t1, 0x7F
-    li      t3, 0x03                                                          # LOAD opcode
+    li      t3, 0x03            # LOAD opcode
     bne     t2, t3, unhandled_exception_path
-
+    
     srli    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 2                                                             # LW funct3
+    li      t3, 2               # LW funct3
     bne     t2, t3, unhandled_exception_path
-
-# Extract destination register (rd)
+    
+    # Extract destination register (rd)
     srli    t2, t1, 7
     andi    t2, t2, 0x1F
-
-# Get fault address and perform manual load
+    
+    # Get fault address and perform manual load
     csrr    t3, mtval
     lbu     t4, 0(t3)
     lbu     t5, 1(t3)
     lbu     t6, 2(t3)
     lbu     a0, 3(t3)
-
-# Combine bytes into word
+    
+    # Combine bytes into word
     slli    t5, t5, 8
     slli    t6, t6, 16
     slli    a0, a0, 24
     or      t4, t4, t5
     or      t4, t4, t6
     or      t4, t4, a0
-
-# Store result to rd's saved location
+    
+    # Store result to rd's saved location
     slli    t5, t2, 2
     add     t5, sp, t5
     sw      t4, 0(t5)
-
-# Update mscratch if rd was sp (x2)
+    
+    # Update mscratch if rd was sp (x2)
     li      t6, 2
     bne     t2, t6, bypass_mscratch_modification
     lw      t6, 8(sp)
     csrw    mscratch, t6
-
+    
 bypass_mscratch_modification:
-# Advance to next instruction
+    # Advance to next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
     j       register_restoration_sequence
-
+    
 unhandled_exception_path:
-# Trap couldn't be handled
+    # Trap couldn't be handled
     j       register_restoration_sequence
-
+    
 register_restoration_sequence:
-# Restore all registers
-    lw      ra, 4(sp)
-# Skip restoring sp (x2) for now
-    lw      gp, 12(sp)
-    lw      tp, 16(sp)
-    lw      t0, 20(sp)
-    lw      t1, 24(sp)
-    lw      t2, 28(sp)
-    lw      s0, 32(sp)
-    lw      s1, 36(sp)
-    lw      a0, 40(sp)
-    lw      a1, 44(sp)
-    lw      a2, 48(sp)
-    lw      a3, 52(sp)
-    lw      a4, 56(sp)
-    lw      a5, 60(sp)
-    lw      a6, 64(sp)
-    lw      a7, 68(sp)
-    lw      s2, 72(sp)
-    lw      s3, 76(sp)
-    lw      s4, 80(sp)
-    lw      s5, 84(sp)
-    lw      s6, 88(sp)
-    lw      s7, 92(sp)
-    lw      s8, 96(sp)
+    # Restore all registers
+    lw      ra,   4(sp)
+    # Skip restoring sp (x2) for now
+    lw      gp,  12(sp)
+    lw      tp,  16(sp)
+    lw      t0,  20(sp)
+    lw      t1,  24(sp)
+    lw      t2,  28(sp)
+    lw      s0,  32(sp)
+    lw      s1,  36(sp)
+    lw      a0,  40(sp)
+    lw      a1,  44(sp)
+    lw      a2,  48(sp)
+    lw      a3,  52(sp)
+    lw      a4,  56(sp)
+    lw      a5,  60(sp)
+    lw      a6,  64(sp)
+    lw      a7,  68(sp)
+    lw      s2,  72(sp)
+    lw      s3,  76(sp)
+    lw      s4,  80(sp)
+    lw      s5,  84(sp)
+    lw      s6,  88(sp)
+    lw      s7,  92(sp)
+    lw      s8,  96(sp)
     lw      s9, 100(sp)
     lw      s10,104(sp)
     lw      s11,108(sp)
@@ -260,12 +263,11 @@ register_restoration_sequence:
     lw      t4, 116(sp)
     lw      t5, 120(sp)
     lw      t6, 124(sp)
-
-# Restore stack pointer
+    
+    # Restore stack pointer
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 system_termination_point:
     j       system_termination_point
