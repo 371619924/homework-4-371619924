@@ -169,12 +169,18 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # 3) 检查 trap cause (mcause)
+    # 3) 读取 mcause
     csrr t0, mcause
-    li t1, 4        # 4 = misaligned load
-    bne t0, t1, terminate
+    li t1, 4       # Misaligned Load
+    beq t0, t1, check_lw
 
-    # 4) 获取导致异常的指令
+    li t1, 6       # Misaligned Store
+    beq t0, t1, terminate # 直接终止，不处理
+
+    j terminate    # 其他异常直接终止
+
+check_lw:
+    # 4) 读取异常指令
     csrr t0, mepc   # 获取指令地址
     lw t1, 0(t0)    # 读取异常指令
 
@@ -203,18 +209,14 @@ __mtrap:
     csrr t3, mtval
 
     # 9) 逐字节加载数据
-    lb t4, 0(t3)
-    andi t4, t4, 0xFF
-    lb t5, 1(t3)
-    andi t5, t5, 0xFF
+    lb t4, 0(t3)   # 读取最低字节
+    lb t5, 1(t3)   
     slli t5, t5, 8
     or t4, t4, t5
-    lb t5, 2(t3)
-    andi t5, t5, 0xFF
+    lb t5, 2(t3)   
     slli t5, t5, 16
     or t4, t4, t5
-    lb t5, 3(t3)
-    andi t5, t5, 0xFF
+    lb t5, 3(t3)   
     slli t5, t5, 24
     or t4, t4, t5
 
