@@ -171,21 +171,22 @@ __mtrap:
     # Check cause of trap
     csrr t0, mcause
     
-    # Check if it's a misaligned load (cause 4)
-    li t1, 4
-    beq t0, t1, handle_misaligned_load
-    
     # Check if it's a misaligned instruction address (cause 0)
     li t1, 0
     beq t0, t1, handle_misaligned_instruction
+    
+    # Check if it's a misaligned load (cause 4)
+    li t1, 4
+    beq t0, t1, handle_misaligned_load
     
     # Not a handled exception type, restore and terminate
     j restore_and_terminate
 
 handle_misaligned_instruction:
-    # Skip the bad instruction by incrementing mepc
+    # For misaligned instruction fetches, just increment mepc to next aligned address
+    # No need to attempt reading from the invalid address
     csrr t0, mepc
-    addi t0, t0, 4    # Move to next instruction
+    addi t0, t0, 4    # Move to next instruction (aligned)
     csrw mepc, t0     # Update mepc
     j restore_and_return
 
@@ -200,37 +201,33 @@ handle_misaligned_load:
     
     # Get misaligned address
     csrr t3, mtval
-    andi t4, t3, 0x3     # Offset within word
-    andi t5, t3, -4      # Aligned address
     
-    # Load bytes individually to handle byte ordering properly
-    add t6, zero, zero   # Clear result register
+    # Load the bytes individually to handle byte ordering correctly
+    lb t4, 0(t3)      # First byte
+    lb t5, 1(t3)      # Second byte
+    lb t6, 2(t3)      # Third byte
+    lb a0, 3(t3)      # Fourth byte
     
-    # Load byte by byte with proper ordering
-    lb a0, 0(t3)         # Load first byte
+    # Combine bytes with proper ordering
+    andi t4, t4, 0xff
+    andi t5, t5, 0xff
+    slli t5, t5, 8
+    or t4, t4, t5
+    
+    andi t6, t6, 0xff
+    slli t6, t6, 16
+    or t4, t4, t6
+    
     andi a0, a0, 0xff
-    or t6, t6, a0
-    
-    lb a0, 1(t3)         # Load second byte
-    andi a0, a0, 0xff
-    slli a0, a0, 8
-    or t6, t6, a0
-    
-    lb a0, 2(t3)         # Load third byte
-    andi a0, a0, 0xff
-    slli a0, a0, 16
-    or t6, t6, a0
-    
-    lb a0, 3(t3)         # Load fourth byte  
     slli a0, a0, 24
-    or t6, t6, a0
+    or t4, t4, a0
     
-    # Store result to register
+    # Store result to destination register
     slli t2, t2, 2       # rd*4 for offset
     add t2, sp, t2       # Address in stack
-    sw t6, 0(t2)         # Save result
+    sw t4, 0(t2)         # Save result
     
-    # Increment mepc
+    # Increment mepc to next instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
@@ -315,7 +312,7 @@ restore_and_terminate:
     
     # Jump to terminate
     j terminate
-
+    
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
