@@ -169,13 +169,13 @@ __mtrap:
     sw      t5,  116(sp)  # x30
     sw      t6,  120(sp)  # x31
 
-    # 检查是否为中断（mscratch最高位）
+    # 检查是否为中断（mcause最高位）
     csrr    a0, mcause
-    srli    a1, a0, 31
+    srli    a1, a0, 31         # 提取最高位到a1
     bnez    a1, _trap_fail     # 如果是中断，不处理
 
-    # 检查具体的异常类型
-    andi    a0, a0, 0x7FFFFFFF # 清除中断位
+    # 获取异常代码（无需清除中断位）
+    # 由于我们已经检查了中断位，直接使用低位
     li      a1, 4              # 未对齐加载代码
     beq     a0, a1, handle_misaligned_load
     li      a1, 6              # 未对齐存储代码
@@ -334,7 +334,6 @@ _trap_fail:
     
     # 跳转到终止程序
     j       terminate
-    
 
 
 # This code is taken from the default VRV system code. It prints out
