@@ -130,7 +130,7 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 
-_mtrap:
+__mtrap:
 # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
