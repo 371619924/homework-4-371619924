@@ -168,173 +168,59 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Check cause of trap
+    # Check mcause to determine the type of exception
     csrr t0, mcause
     
-    # Check for misaligned instruction address (cause 0)
-    beqz t0, handle_misaligned_instruction
-    
-    # Check for misaligned load address (cause 4)
+    # Check if it's a misaligned load (cause 4)
     li t1, 4
     beq t0, t1, handle_misaligned_load
     
-    # Check for load access fault (cause 5)
-    li t1, 5
-    beq t0, t1, handle_load_fault
-    
-    # Check for misaligned store address (cause 6)
-    li t1, 6
-    beq t0, t1, handle_misaligned_store
-    
-    # If none of the above, terminate
+    # For all other exceptions, just terminate
     j terminate
 
-handle_misaligned_instruction:
-    # Handle a misaligned instruction address
-    # For the jr a0 case where a0=3, we'll correct the jump target
-    csrr t0, mepc      # Get instruction that caused the exception
-    lw t1, 0(t0)       # Load the instruction
-    
-    # Extract rd field to find which register we're jumping to
-    # For jr instruction, the format should be: jalr rd, 0(rs1)
-    # Where rd is typically x0 (zero register) for a jump instruction
-    
-    # Extract rs1 (source register containing the jump address)
-    srli t2, t1, 15
-    andi t2, t2, 0x1F  # Get rs1 (bits 19-15)
-    
-    # Get the value from that register (our misaligned jump target)
-    slli t3, t2, 2    # Multiply by 4 to get offset in our saved register array
-    add t3, sp, t3    # Get address in our saved register array
-    lw t4, 0(t3)      # Get the value (the misaligned address)
-    
-    # Align the address to the nearest lower 4-byte boundary
-    andi t4, t4, -4   # Clear lowest 2 bits to align to 4 bytes
-    
-    # Update the saved register value with the aligned address
-    sw t4, 0(t3)
-    
-    # Now continue with the instruction, since we've fixed the jump target
-    # Set mepc to the corrected jump target
-    csrw mepc, t4
-    j restore_and_return
-
 handle_misaligned_load:
-    # Get faulting instruction
-    csrr t0, mepc      # Get instruction pointer
-    lw t1, 0(t0)       # Get instruction
-
-    # Extract destination register
-    srli t2, t1, 7      # Shift right to get rd
-    andi t2, t2, 0x1f   # Mask to get 5 bits
-
-    # Get misaligned address and word-aligned addresses
-    csrr t3, mtval      # Get misaligned address
-    andi t4, t3, 0x3    # Get offset within word (0-3)
-    andi t5, t3, -4     # Get word-aligned address (clear bottom 2 bits)
-
-    # Load both aligned words that contain our data
-    lw t6, 0(t5)        # Load first word
-    lw a0, 4(t5)        # Load next word
-
-    # Calculate number of bits to shift based on offset
-    slli t4, t4, 3      # Convert byte offset to bits (multiply by 8)
-
-    # Extract bytes from the aligned words
-    srl t6, t6, t4      # Right shift first word by offset
-    li t1, 32           # Bits in a word
-    sub t1, t1, t4      # Calculate complementary shift
-    sll a0, a0, t1      # Left shift second word
-    or t6, t6, a0       # Combine the parts to get our value
-
-    # Store the result in the original destination register location
-    slli t2, t2, 2      # Multiply rd by 4 for offset
-    add t2, sp, t2      # Get stack location
-    sw t6, 0(t2)        # Save result
-
-    # Increment mepc to next instruction
+    # Get address of misaligned load
+    csrr t3, mtval
+    
+    # Get word-aligned address and offset
+    andi t4, t3, 0x3       # Offset within word (0-3)
+    andi t5, t3, -4        # Word-aligned address
+    
+    # Get first aligned word
+    lw t6, 0(t5)
+    
+    # Get second aligned word (safely checking for null pointer)
+    addi t5, t5, 4         # Address of next word
+    lw a0, 0(t5)
+    
+    # Calculate bit shifts
+    slli t4, t4, 3         # Convert byte offset to bit offset
+    li t1, 32
+    sub t1, t1, t4         # Complementary shift amount
+    
+    # Combine parts of both words
+    srl t6, t6, t4         # Right shift first word
+    sll a0, a0, t1         # Left shift second word
+    or t6, t6, a0          # Combine to get final value
+    
+    # Get the destination register from the instruction
+    csrr t0, mepc
+    lw t1, 0(t0)           # Get the instruction that caused the trap
+    
+    # Extract rd field (destination register)
+    srli t2, t1, 7
+    andi t2, t2, 0x1F      # Get rd (bits 11-7)
+    
+    # Store result in destination register
+    slli t2, t2, 2         # Convert register number to offset in stack
+    add t2, sp, t2         # Address in stack where register is saved
+    sw t6, 0(t2)           # Save the result to the register's saved location
+    
+    # Advance to next instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-    j restore_and_return
-
-handle_load_fault:
-    # For null pointer or load access faults, return 0 in destination register
-    csrr t0, mepc        # Get instruction pointer
-    lw t1, 0(t0)         # Get instruction
-
-    # Extract destination register
-    srli t2, t1, 7       # Shift right to get rd
-    andi t2, t2, 0x1f    # Mask to get 5 bits
-
-    # Special case: only fix if destination is not x0
-    beqz t2, terminate   # If rd is x0, just terminate
-
-    # Set the destination register to 0
-    slli t2, t2, 2       # Multiply rd by 4 for offset
-    add t2, sp, t2       # Get stack location
-    sw zero, 0(t2)       # Save 0 as result
-
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    j restore_and_return
-
-handle_misaligned_store:
-    # Get faulting instruction
-    csrr t0, mepc        # Get instruction pointer
-    lw t1, 0(t0)         # Get instruction
-
-    # Extract source register (rs2)
-    srli t2, t1, 20      # Shift right to get rs2
-    andi t2, t2, 0x1f    # Mask to get 5 bits
-
-    # Get the value to store from saved registers
-    slli t3, t2, 2       # Multiply rs2 by 4 for offset
-    add t3, sp, t3       # Get stack location
-    lw t3, 0(t3)         # Load value to store
-
-    # Get misaligned address and word-aligned addresses
-    csrr t4, mtval       # Get misaligned address
-    andi t5, t4, 0x3     # Get offset within word (0-3)
-    andi t6, t4, -4      # Get word-aligned address (clear bottom 2 bits)
-
-    # Load both words we'll need to modify
-    lw a0, 0(t6)         # Load first word
-    lw a1, 4(t6)         # Load second word
-
-    # Calculate masks and shifts based on alignment
-    slli t5, t5, 3       # Convert byte offset to bits (multiply by 8)
-    li a2, 32            # Bits in a word
-    sub a3, a2, t5       # Calculate complementary shift
-
-    # Create masks for the two words
-    li a4, -1            # All ones
-    srl a5, a4, a3       # Mask for first word (upper bits)
-    sll a6, a4, t5       # Mask for second word (lower bits)
-    not a5, a5           # Invert first mask
-    not a6, a6           # Invert second mask
-
-    # Split the value to store across the two words
-    and a0, a0, a5       # Clear bits in first word where we'll store
-    and a1, a1, a6       # Clear bits in second word where we'll store
-    sll a5, t3, t5       # Position value for first word
-    srl a6, t3, a3       # Position value for second word
-    or a0, a0, a5        # Insert value into first word
-    or a1, a1, a6        # Insert value into second word
-
-    # Store the modified words back to memory
-    sw a0, 0(t6)         # Store first word
-    sw a1, 4(t6)         # Store second word
-
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    j restore_and_return
-
-restore_and_return:
+    
     # Restore all registers
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -367,13 +253,12 @@ restore_and_return:
     lw x30, 120(sp)
     lw x31, 124(sp)
     addi sp, sp, 128
-
+    
     # Restore original stack pointer
     csrrw sp, mscratch, sp
-
+    
     # Return from trap
     mret
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
