@@ -174,6 +174,9 @@ __mtrap:
     csrr    t0, mcause
     li      t1, 4                                                             # 4 = misaligned load
     bne     t0, t1, fail
+    li      t1, 6             # 6 = misaligned store
+    beq     t0, t1, handle_misaligned_store
+
 
 # 4) Handle misaligned load:
 # Read faulting instruction to get rd
@@ -301,6 +304,36 @@ fail:
 
     csrrw   sp, mscratch, sp
     j       terminate
+    
+handle_misaligned_store:
+    csrr    t0, mepc          # 读取 faulting 指令地址
+    lw      t1, 0(t0)         # 读取 faulting 指令 (sw/sh/sb)
+    csrr    t3, mtval         # 读取 misaligned 地址
+
+    # 解析 store 指令，找到 rs2 (source register)
+    srli    t2, t1, 20        # rs2 在 bit [24:20]
+    andi    t2, t2, 0x1F      # t2 = rs2
+
+    # 计算 rs2 在保存区域的偏移 (sp + rs2*4)
+    slli    t2, t2, 2
+    add     t2, sp, t2
+    lw      t4, 0(t2)         # t4 = 要存储的值 (rs2 的值)
+
+    # 逐字节写入目标地址
+    sb      t4, 0(t3)
+    srli    t4, t4, 8
+    sb      t4, 1(t3)
+    srli    t4, t4, 8
+    sb      t4, 2(t3)
+    srli    t4, t4, 8
+    sb      t4, 3(t3)
+
+    # 跳过 faulting 指令 (mepc += 4)
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+
+    j       restore_registers
 
 
 
