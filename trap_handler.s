@@ -130,17 +130,16 @@ __mstart:
 
 
 ### Trap handler
+
 __mtrap:
-    # 1) 交换堆栈指针(sp) 和 mscratch, 让内核使用自己的栈
+    # Save original stack pointer in mscratch
     csrrw   sp, mscratch, sp
 
-    # ------------------------------------------------
-    # 2) 保存所有寄存器到内核栈 (128字节 = 32个寄存器 * 4字节)
-    # ------------------------------------------------
+    # Save all registers
     addi    sp, sp, -128
     sw      x0,  0(sp)
     sw      x1,  4(sp)
-    sw      x2,  8(sp)    # Save sp (x2)
+    sw      x2,  8(sp)    # Save original sp (x2)
     sw      x3,  12(sp)
     sw      x4,  16(sp)
     sw      x5,  20(sp)
@@ -171,66 +170,54 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # ------------------------------------------------
-    # 3) 检查 trap 原因 (mcause)
-    #    如果不是“misaligned load”就去 terminate
-    # ------------------------------------------------
+    # Check if this is a misaligned load exception (cause = 4)
     csrr    t0, mcause
     li      t1, 4                 # 4 = misaligned load
-    bne     t0, t1, terminate
+    bne     t0, t1, terminate     # If not a misaligned load, jump to terminate
 
-    # ------------------------------------------------
-    # 4) 处理 misaligned load:
-    #    - 读取 faulting 指令获取 rd
-    #    - 从 mtval 获取错位地址
-    #    - 用 lb+andi 读4字节组合成32位
-    #    - 写回到对应的寄存器保存区
-    #    - mepc += 4 跳过故障指令
-    # ------------------------------------------------
-
-    # 4a) 读取故障指令, 获取 rd
-    csrr    t0, mepc           # t0 = 指令地址
-    lw      t1, 0(t0)          # t1 = faulting 指令 (lw)
-    # lw 格式: opcode[6:0] | rd[11:7] | rs1[19:15] | imm[31:20] ...
-    # rd = (指令 >> 7) & 0x1F
+    # Handle misaligned load:
+    # 1. Read the faulting instruction to get rd (destination register)
+    csrr    t0, mepc              # t0 = instruction address
+    lw      t1, 0(t0)             # t1 = faulting instruction
+    
+    # Extract rd field (bits 11-7)
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F       # t2 现在是 rd
-
-    # 4b) 获取错位地址
-    csrr    t3, mtval          # t3 = misaligned address
-
-    # 4c) 依次读4字节 (使用 lb+andi 来 zero-extend)
-    lb      t4, 0(t3)          # byte0 (最低位)
+    andi    t2, t2, 0x1F          # t2 = rd
+    
+    # 2. Get the misaligned address
+    csrr    t3, mtval             # t3 = misaligned address
+    
+    # 3. Load each byte individually (using lb to avoid another exception)
+    # Important: use lb and assemble the word with proper byte order
+    lb      t4, 0(t3)             # Least significant byte
     andi    t4, t4, 0xFF
-    lb      t5, 1(t3)          # byte1
+    
+    lb      t5, 1(t3)
     andi    t5, t5, 0xFF
     slli    t5, t5, 8
     or      t4, t4, t5
-
-    lb      t5, 2(t3)          # byte2
+    
+    lb      t5, 2(t3)
     andi    t5, t5, 0xFF
     slli    t5, t5, 16
     or      t4, t4, t5
-
-    lb      t5, 3(t3)          # byte3 (最高位)
+    
+    lb      t5, 3(t3)             # Most significant byte
     andi    t5, t5, 0xFF
     slli    t5, t5, 24
-    or      t4, t4, t5
-
-    # 4d) 写回到保存区
-    #     保存区起始 sp, 每个寄存器4字节, rd 对应偏移 = rd*4
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    sw      t4, 0(t2)
-
-    # 4e) 跳过故障指令 (mepc += 4)
+    or      t4, t4, t5            # t4 now contains the reconstructed word
+    
+    # 4. Store reconstructed word to the destination register's saved location
+    slli    t2, t2, 2             # t2 = rd*4 (offset in saved register area)
+    add     t2, sp, t2            # t2 = address of saved rd
+    sw      t4, 0(t2)             # Store reconstructed word to saved rd
+    
+    # 5. Advance mepc to skip the faulting instruction
     csrr    t0, mepc
-    addi    t0, t0, 4
+    addi    t0, t0, 4             # Move to next instruction
     csrw    mepc, t0
-
-    # ------------------------------------------------
-    # 5) 恢复所有寄存器, 然后 mret 返回
-    # ------------------------------------------------
+    
+    # Restore all registers
     lw      x1,  4(sp)
     lw      x3,  12(sp)
     lw      x4,  16(sp)
@@ -262,13 +249,12 @@ __mtrap:
     lw      x30, 120(sp)
     lw      x31, 124(sp)
     addi    sp, sp, 128
-
-    # 恢复原始栈指针
+    
+    # Restore original stack pointer
     csrrw   sp, mscratch, sp
-
-    # 从trap返回
+    
+    # Return from trap
     mret
-
 
 
 # This code is taken from the default VRV system code. It prints out
