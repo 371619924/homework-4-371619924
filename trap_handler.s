@@ -127,15 +127,15 @@ __mstart:
 ### Trap handler
 
 ### You will need to write your own trap handler functionality here.
-__mtrap:
-    # Swap SP and mscratch
+_mtrap:
+    # Swap stack pointer with mscratch
     csrrw sp, mscratch, sp
 
-    # Save all registers
+    # Save all registers to kernel stack
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)
+    sw x2, 8(sp)    # Save sp (x2)
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -166,84 +166,56 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Check if misaligned load or store
+    # Check if it's a misaligned load
     csrr t0, mcause
-    li t1, 4      # Misaligned load
-    beq t0, t1, handle_misaligned_load
-    li t1, 6      # Misaligned store
-    beq t0, t1, handle_misaligned_store
-    j terminate   # Other exceptions
+    li t1, 4    # 4 = misaligned load
+    bne t0, t1, trap_fail
 
-handle_misaligned_load:
     # Get the faulting instruction
     csrr t0, mepc
     lw t1, 0(t0)
-    
+
+    # Verify this is a load word instruction
+    # Check opcode (bits 6:0) = 0x03 for load
+    andi t2, t1, 0x7F
+    li t3, 0x03
+    bne t2, t3, trap_fail
+
+    # Check funct3 (bits 14:12) = 0x2 for word size
+    srli t2, t1, 12
+    andi t2, t2, 0x7
+    li t3, 2
+    bne t2, t3, trap_fail
+
     # Extract destination register (rd)
     srli t2, t1, 7
     andi t2, t2, 0x1F
-    
-    # Get the misaligned address
+
+    # Get misaligned address from mtval
     csrr t3, mtval
-    
-    # Read 4 bytes and combine them
-    lbu t4, 0(t3)
-    lbu t5, 1(t3)
+
+    # Read 4 bytes sequentially using lbu (load byte unsigned)
+    lbu t4, 0(t3)         # byte0 (lowest)
+    lbu t5, 1(t3)         # byte1
     slli t5, t5, 8
     or t4, t4, t5
-    lbu t5, 2(t3)
+    lbu t5, 2(t3)         # byte2
     slli t5, t5, 16
     or t4, t4, t5
-    lbu t5, 3(t3)
+    lbu t5, 3(t3)         # byte3 (highest)
     slli t5, t5, 24
     or t4, t4, t5
-    
-    # Store result to saved register area
-    slli t6, t2, 2
-    add t6, sp, t6
-    sw t4, 0(t6)
-    
-    # Increment mepc
+
+    # Write back to save area
+    slli t2, t2, 2
+    add t2, sp, t2
+    sw t4, 0(t2)
+
+    # Skip faulting instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-    
-    j restore_registers
 
-handle_misaligned_store:
-    # Get the faulting instruction
-    csrr t0, mepc
-    lw t1, 0(t0)
-    
-    # Extract source register (rs2) - bits 24:20
-    srli t2, t1, 20
-    andi t2, t2, 0x1F
-    
-    # Get the register value to store
-    slli t3, t2, 2
-    add t3, sp, t3
-    lw t4, 0(t3)
-    
-    # Get misaligned destination address
-    csrr t5, mtval
-    
-    # Store bytes individually in proper order
-    sb t4, 0(t5)
-    srli t4, t4, 8
-    sb t4, 1(t5)
-    srli t4, t4, 8
-    sb t4, 2(t5)
-    srli t4, t4, 8
-    sb t4, 3(t5)
-    
-    # Increment mepc
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    
-    # Fall through to restore_registers
-
-restore_registers:
     # Restore all registers
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -275,14 +247,52 @@ restore_registers:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-    
     addi sp, sp, 128
-    
+
+    # Restore original stack pointer
+    csrrw sp, mscratch, sp
+
+    # Return from trap
+    mret
+
+trap_fail:
+    # Restore all registers
+    lw x1, 4(sp)
+    lw x3, 12(sp)
+    lw x4, 16(sp)
+    lw x5, 20(sp)
+    lw x6, 24(sp)
+    lw x7, 28(sp)
+    lw x8, 32(sp)
+    lw x9, 36(sp)
+    lw x10, 40(sp)
+    lw x11, 44(sp)
+    lw x12, 48(sp)
+    lw x13, 52(sp)
+    lw x14, 56(sp)
+    lw x15, 60(sp)
+    lw x16, 64(sp)
+    lw x17, 68(sp)
+    lw x18, 72(sp)
+    lw x19, 76(sp)
+    lw x20, 80(sp)
+    lw x21, 84(sp)
+    lw x22, 88(sp)
+    lw x23, 92(sp)
+    lw x24, 96(sp)
+    lw x25, 100(sp)
+    lw x26, 104(sp)
+    lw x27, 108(sp)
+    lw x28, 112(sp)
+    lw x29, 116(sp)
+    lw x30, 120(sp)
+    lw x31, 124(sp)
+    addi sp, sp, 128
+
     # Restore original stack pointer
     csrrw sp, mscratch, sp
     
-    mret
-
+    j terminate
 
 
 # This code is taken from the default VRV system code. It prints out
