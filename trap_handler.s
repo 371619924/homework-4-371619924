@@ -137,7 +137,7 @@ __mtrap:
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)  # Save sp (x2)
+    sw x2, 8(sp)  # Save original sp
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -168,60 +168,53 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Check mcause to determine the type of exception
+    # Check cause of trap
     csrr t0, mcause
     
     # Check if it's a misaligned load (cause 4)
     li t1, 4
-    beq t0, t1, handle_misaligned_load
-    
-    # For all other exceptions, just terminate
-    j terminate
+    bne t0, t1, terminate
 
-handle_misaligned_load:
-    # Get address of misaligned load
-    csrr t3, mtval
+    # Get the misaligned address
+    csrr a0, mtval
     
-    # Get word-aligned address and offset
-    andi t4, t3, 0x3       # Offset within word (0-3)
-    andi t5, t3, -4        # Word-aligned address
+    # Get the aligned addresses
+    andi a1, a0, -4       # word-aligned address (clear bottom 2 bits)
+    addi a2, a1, 4        # next word-aligned address
     
-    # Get first aligned word
-    lw t6, 0(t5)
+    # Load the two aligned words
+    lw a3, 0(a1)          # first word
+    lw a4, 0(a2)          # second word
     
-    # Get second aligned word (safely checking for null pointer)
-    addi t5, t5, 4         # Address of next word
-    lw a0, 0(t5)
+    # Calculate shift amount
+    andi a5, a0, 3        # offset within word (0-3)
+    slli a5, a5, 3        # convert to bits (multiply by 8)
+
+    # Extract and combine bytes
+    srl a3, a3, a5        # shift right first word by offset
+    li a6, 32
+    sub a6, a6, a5        # complementary shift
+    sll a4, a4, a6        # shift left second word
+    or a3, a3, a4         # combine to get final word
     
-    # Calculate bit shifts
-    slli t4, t4, 3         # Convert byte offset to bit offset
-    li t1, 32
-    sub t1, t1, t4         # Complementary shift amount
+    # Get faulting instruction
+    csrr a4, mepc
+    lw a5, 0(a4)          # load instruction
     
-    # Combine parts of both words
-    srl t6, t6, t4         # Right shift first word
-    sll a0, a0, t1         # Left shift second word
-    or t6, t6, a0          # Combine to get final value
+    # Extract destination register number
+    srli a6, a5, 7
+    andi a6, a6, 0x1f     # rd field (bits 11-7)
     
-    # Get the destination register from the instruction
-    csrr t0, mepc
-    lw t1, 0(t0)           # Get the instruction that caused the trap
-    
-    # Extract rd field (destination register)
-    srli t2, t1, 7
-    andi t2, t2, 0x1F      # Get rd (bits 11-7)
-    
-    # Store result in destination register
-    slli t2, t2, 2         # Convert register number to offset in stack
-    add t2, sp, t2         # Address in stack where register is saved
-    sw t6, 0(t2)           # Save the result to the register's saved location
+    # Store result in destination register's saved location
+    slli a6, a6, 2        # multiply by 4 (bytes per word)
+    add a6, sp, a6        # get address in saved state
+    sw a3, 0(a6)          # save result
     
     # Advance to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
+    addi a4, a4, 4        # increment mepc
+    csrw mepc, a4         # update mepc
     
-    # Restore all registers
+    # Restore registers
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -254,11 +247,13 @@ handle_misaligned_load:
     lw x31, 124(sp)
     addi sp, sp, 128
     
-    # Restore original stack pointer
+    # Restore original SP
     csrrw sp, mscratch, sp
     
     # Return from trap
     mret
+
+    
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
