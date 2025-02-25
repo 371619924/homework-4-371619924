@@ -132,128 +132,130 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-    # Save original stack pointer in mscratch
+    # 交换内核栈和用户栈（mscratch中保存的是内核栈指针）
     csrrw   sp, mscratch, sp
 
-    # Save all registers
+    # 保存所有寄存器到内核栈
     addi    sp, sp, -128
-    sw      x0,  0(sp)
-    sw      x1,  4(sp)
-    sw      x2,  8(sp)    # Save original sp (x2)
-    sw      x3,  12(sp)
-    sw      x4,  16(sp)
-    sw      x5,  20(sp)
-    sw      x6,  24(sp)
-    sw      x7,  28(sp)
-    sw      x8,  32(sp)
-    sw      x9,  36(sp)
-    sw      x10, 40(sp)
-    sw      x11, 44(sp)
-    sw      x12, 48(sp)
-    sw      x13, 52(sp)
-    sw      x14, 56(sp)
-    sw      x15, 60(sp)
-    sw      x16, 64(sp)
-    sw      x17, 68(sp)
-    sw      x18, 72(sp)
-    sw      x19, 76(sp)
-    sw      x20, 80(sp)
-    sw      x21, 84(sp)
-    sw      x22, 88(sp)
-    sw      x23, 92(sp)
-    sw      x24, 96(sp)
-    sw      x25, 100(sp)
-    sw      x26, 104(sp)
-    sw      x27, 108(sp)
-    sw      x28, 112(sp)
-    sw      x29, 116(sp)
-    sw      x30, 120(sp)
-    sw      x31, 124(sp)
+    sw      x0,   0(sp)
+    sw      x1,   4(sp)
+    sw      x2,   8(sp)    # 保存原来的 sp（x2）
+    sw      x3,   12(sp)
+    sw      x4,   16(sp)
+    sw      x5,   20(sp)
+    sw      x6,   24(sp)
+    sw      x7,   28(sp)
+    sw      x8,   32(sp)
+    sw      x9,   36(sp)
+    sw      x10,  40(sp)
+    sw      x11,  44(sp)
+    sw      x12,  48(sp)
+    sw      x13,  52(sp)
+    sw      x14,  56(sp)
+    sw      x15,  60(sp)
+    sw      x16,  64(sp)
+    sw      x17,  68(sp)
+    sw      x18,  72(sp)
+    sw      x19,  76(sp)
+    sw      x20,  80(sp)
+    sw      x21,  84(sp)
+    sw      x22,  88(sp)
+    sw      x23,  92(sp)
+    sw      x24,  96(sp)
+    sw      x25,  100(sp)
+    sw      x26,  104(sp)
+    sw      x27,  108(sp)
+    sw      x28,  112(sp)
+    sw      x29,  116(sp)
+    sw      x30,  120(sp)
+    sw      x31,  124(sp)
 
-    # Check if this is a misaligned load exception (cause = 4)
-    csrr    t0, mcause
-    li      t1, 4                 # 4 = misaligned load
-    bne     t0, t1, terminate     # If not a misaligned load, jump to terminate
+    # 对 mcause 进行精细处理：
+    csrr    t0, mcause         # t0 <- mcause
+    li      t1, 0x80000000      # 用于检测最高位（中断标志）
+    and     t2, t0, t1         # t2 = mcause 的最高位
+    bnez    t2, terminate      # 如果最高位置位，则为中断，直接跳转到 terminate
+    li      t1, 0x7FFFFFFF      # 用于屏蔽最高位（保留低 31 位）
+    and     t0, t0, t1         # 清除 mcause 的最高位
+    li      t1, 4              # 期望的异常码：misaligned load
+    bne     t0, t1, terminate   # 如果异常码不为 4，则跳转到 terminate
 
-    # Handle misaligned load:
-    # 1. Read the faulting instruction to get rd (destination register)
-    csrr    t0, mepc              # t0 = instruction address
-    lw      t1, 0(t0)             # t1 = faulting instruction
-    
-    # Extract rd field (bits 11-7)
+    # 处理 misaligned load 异常
+    csrr    t0, mepc           # 获取故障指令地址
+    lw      t1, 0(t0)          # 读取故障指令
+
+    # 提取指令中 rd 字段（位 11-7）
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F          # t2 = rd
-    
-    # 2. Get the misaligned address
-    csrr    t3, mtval             # t3 = misaligned address
-    
-    # 3. Load each byte individually (using lb to avoid another exception)
-    # Important: use lb and assemble the word with proper byte order
-    lb      t4, 0(t3)             # Least significant byte
+    andi    t2, t2, 0x1F
+
+    csrr    t3, mtval          # 获取引起异常的错误地址
+
+    # 分别加载各个字节（用 lb 防止再次异常）并按正确的字节序组合成完整的字
+    lb      t4, 0(t3)          # 最低有效字节
     andi    t4, t4, 0xFF
-    
-    lb      t5, 1(t3)
+
+    lb      t5, 1(t3)          # 第二字节
     andi    t5, t5, 0xFF
     slli    t5, t5, 8
     or      t4, t4, t5
-    
-    lb      t5, 2(t3)
+
+    lb      t5, 2(t3)          # 第三字节
     andi    t5, t5, 0xFF
     slli    t5, t5, 16
     or      t4, t4, t5
-    
-    lb      t5, 3(t3)             # Most significant byte
+
+    lb      t5, 3(t3)          # 最高有效字节
     andi    t5, t5, 0xFF
     slli    t5, t5, 24
-    or      t4, t4, t5            # t4 now contains the reconstructed word
-    
-    # 4. Store reconstructed word to the destination register's saved location
-    slli    t2, t2, 2             # t2 = rd*4 (offset in saved register area)
-    add     t2, sp, t2            # t2 = address of saved rd
-    sw      t4, 0(t2)             # Store reconstructed word to saved rd
-    
-    # 5. Advance mepc to skip the faulting instruction
+    or      t4, t4, t5         # t4 现为重构后的完整字
+
+    # 将重构结果存入保存的目标寄存器区域
+    slli    t2, t2, 2          # 计算偏移：rd * 4
+    add     t2, sp, t2         # t2 指向保存的 rd 的位置
+    sw      t4, 0(t2)          # 将重构的字存入保存区域
+
+    # 将 mepc 加 4，以跳过故障指令
     csrr    t0, mepc
-    addi    t0, t0, 4             # Move to next instruction
+    addi    t0, t0, 4
     csrw    mepc, t0
-    
-    # Restore all registers
-    lw      x1,  4(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
-    lw      x10, 40(sp)
-    lw      x11, 44(sp)
-    lw      x12, 48(sp)
-    lw      x13, 52(sp)
-    lw      x14, 56(sp)
-    lw      x15, 60(sp)
-    lw      x16, 64(sp)
-    lw      x17, 68(sp)
-    lw      x18, 72(sp)
-    lw      x19, 76(sp)
-    lw      x20, 80(sp)
-    lw      x21, 84(sp)
-    lw      x22, 88(sp)
-    lw      x23, 92(sp)
-    lw      x24, 96(sp)
-    lw      x25, 100(sp)
-    lw      x26, 104(sp)
-    lw      x27, 108(sp)
-    lw      x28, 112(sp)
-    lw      x29, 116(sp)
-    lw      x30, 120(sp)
-    lw      x31, 124(sp)
+
+    # 恢复所有保存的寄存器
+    lw      x1,   4(sp)
+    lw      x3,   12(sp)
+    lw      x4,   16(sp)
+    lw      x5,   20(sp)
+    lw      x6,   24(sp)
+    lw      x7,   28(sp)
+    lw      x8,   32(sp)
+    lw      x9,   36(sp)
+    lw      x10,  40(sp)
+    lw      x11,  44(sp)
+    lw      x12,  48(sp)
+    lw      x13,  52(sp)
+    lw      x14,  56(sp)
+    lw      x15,  60(sp)
+    lw      x16,  64(sp)
+    lw      x17,  68(sp)
+    lw      x18,  72(sp)
+    lw      x19,  76(sp)
+    lw      x20,  80(sp)
+    lw      x21,  84(sp)
+    lw      x22,  88(sp)
+    lw      x23,  92(sp)
+    lw      x24,  96(sp)
+    lw      x25,  100(sp)
+    lw      x26,  104(sp)
+    lw      x27,  108(sp)
+    lw      x28,  112(sp)
+    lw      x29,  116(sp)
+    lw      x30,  120(sp)
+    lw      x31,  124(sp)
     addi    sp, sp, 128
-    
-    # Restore original stack pointer
+
+    # 恢复原来的用户栈指针
     csrrw   sp, mscratch, sp
-    
-    # Return from trap
+
+    # 返回陷入前的指令地址
     mret
 
 
