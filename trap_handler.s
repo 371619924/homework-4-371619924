@@ -129,10 +129,10 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
 __mtrap:
-    # Switch to kernel stack
+    # Swap kernel stack
     csrrw   sp, mscratch, sp
     
-    # Reserve stack space and save registers
+    # Save registers (optimized layout)
     addi    sp, sp, -128
     sw      ra,   4(sp)
     sw      sp,   8(sp)
@@ -166,74 +166,63 @@ __mtrap:
     sw      t5, 120(sp)
     sw      t6, 124(sp)
     
-    # Get and check trap cause
+    # Check trap cause (fast path)
     csrr    t0, mcause
-    # Clear MSB using shift operations instead of andi with large immediate
-    srli    t0, t0, 1
-    slli    t0, t0, 1
+    li      t1, 4           # Load address fault
+    bne     t0, t1, terminate
     
-    li      t1, 4               # Load address fault code
-    bne     t0, t1, unhandled_exception_path
-    
-    # Get the faulting instruction
+    # Get trapped instruction
     csrr    t0, mepc
-    lw      t1, 0(t0)
+    lw      t1, 0(t0)      
     
-    # Verify it's a load word (lw) instruction
-    andi    t2, t1, 0x7F
-    li      t3, 0x03            # LOAD opcode
-    bne     t2, t3, unhandled_exception_path
+    # Check for lw (opcode 0x03, funct3 2)
+    andi    t2, t1, 0x7F    
+    li      t3, 0x03
+    bne     t2, t3, terminate
     
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 2               # LW funct3
-    bne     t2, t3, unhandled_exception_path
+    srli    t2, t1, 12      
+    andi    t2, t2, 0x7     
+    li      t3, 2
+    bne     t2, t3, terminate
     
-    # Extract destination register (rd)
+    # Get destination register
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F
+    andi    t2, t2, 0x1F    
     
-    # Get fault address and perform manual load
+    # Get fault address and perform the load
     csrr    t3, mtval
     lbu     t4, 0(t3)
     lbu     t5, 1(t3)
     lbu     t6, 2(t3)
     lbu     a0, 3(t3)
     
-    # Combine bytes into word
+    # Combine bytes
     slli    t5, t5, 8
-    slli    t6, t6, 16
-    slli    a0, a0, 24
     or      t4, t4, t5
+    slli    t6, t6, 16
     or      t4, t4, t6
+    slli    a0, a0, 24
     or      t4, t4, a0
     
-    # Store result to rd's saved location
+    # Store to destination register's saved location
     slli    t5, t2, 2
     add     t5, sp, t5
     sw      t4, 0(t5)
     
-    # Update mscratch if rd was sp (x2)
+    # Update mscratch if rd is sp
     li      t6, 2
-    bne     t2, t6, bypass_mscratch_modification
-    lw      t6, 8(sp)
-    csrw    mscratch, t6
+    bne     t2, t6, 1f
+    lw      t4, 8(sp)
+    csrw    mscratch, t4
     
-bypass_mscratch_modification:
-    # Advance to next instruction
+1:  # Advance to next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
-    j       register_restoration_sequence
     
-unhandled_exception_path:
-    # Trap couldn't be handled
-    j       register_restoration_sequence
-    
-register_restoration_sequence:
-    # Restore all registers
+    # Restore registers
     lw      ra,   4(sp)
-    # Skip restoring sp (x2) for now
+    # Skip sp for now
     lw      gp,  12(sp)
     lw      tp,  16(sp)
     lw      t0,  20(sp)
@@ -264,13 +253,15 @@ register_restoration_sequence:
     lw      t5, 120(sp)
     lw      t6, 124(sp)
     
-    # Restore stack pointer
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
 
-system_termination_point:
-    j       system_termination_point
+terminate:
+    # Just jump to terminate without restoring
+    addi    sp, sp, 128
+    csrrw   sp, mscratch, sp
+    j       terminate
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
