@@ -138,7 +138,7 @@ __mtrap:
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)                                                         # Save sp (x2)
+    sw      x2, 8(sp)   # Save sp (x2)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -170,113 +170,88 @@ __mtrap:
     sw      x31, 124(sp)
 
 # 3) Check trap cause (mcause)
-# If not "misaligned load", go to terminate
     csrr    t0, mcause
-    li      t1, 4                                                             # 4 = misaligned load
-    bne     t0, t1, terminate
+    li      t1, 4    # 4 = misaligned load
+    beq     t0, t1, handle_misaligned_load
+    li      t1, 6    # 6 = misaligned store
+    beq     t0, t1, handle_misaligned_store
+    j       terminate  # 如果不是 misaligned load/store，终止
 
-# 4) Handle misaligned load:
-# Read faulting instruction to get rd
-# Get misaligned address from mtval
-# Use lb+andi to read 4 bytes and assemble 32-bit value
-# Write back to corresponding register save area
-# mepc += 4 to skip faulting instruction
+# 4) Handle misaligned load (lw)
+handle_misaligned_load:
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # 读取故障指令
 
-# 4a) Read faulting instruction, get rd
-    csrr    t0, mepc                                                          # t0 = instruction address
-    lw      t1, 0(t0)                                                         # t1 = faulting instruction (lw)
-# lw format: opcode[6: 0] | rd[11: 7] | rs1[19: 15] | imm[31: 20] ...
-# rd = (instruction >> 7) & 0x1F
+    # 提取目标寄存器 rd
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F                                                      # t2 now holds rd
+    andi    t2, t2, 0x1F  
 
-# 4b) Get misaligned address
-    csrr    t3, mtval                                                         # t3 = misaligned address
+    # 读取 misaligned 地址
+    csrr    t3, mtval  
 
-# 4c) Read 4 bytes sequentially (using lb+andi to zero-extend)
-    lb      t4, 0(t3)                                                         # byte0 (lowest)
-    andi    t4, t4, 0xFF
-
-    lb      t5, 1(t3)                                                         # byte1
-    andi    t5, t5, 0xFF
+    # 读取 4 字节数据并重组
+    lb      t4, 0(t3)
+    lb      t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lb      t5, 2(t3)                                                         # byte2
-    andi    t5, t5, 0xFF
+    lb      t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lb      t5, 3(t3)                                                         # byte3 (highest)
-    andi    t5, t5, 0xFF
+    lb      t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-# 4d) Write back to save area
-# Save area starts at sp, each register is 4 bytes, offset = rd*4
+    # 存回目标寄存器（保存在栈中）
     slli    t2, t2, 2
     add     t2, sp, t2
     sw      t4, 0(t2)
 
-# 4e) Skip faulting instruction (mepc += 4)
+    # 跳过错误指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
+    j       restore_registers
 
+
+# 5) Handle misaligned store (sw)
 handle_misaligned_store:
-    # 读取故障指令
-    csrr t0, mepc      # t0 = instruction address
-    lw t1, 0(t0)       # t1 = faulting instruction
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # 读取故障指令
 
     # 提取 rs2（存储的值来源寄存器）
-    srli t2, t1, 20    # rs2 = (instruction >> 20) & 0x1F
-    andi t2, t2, 0x1F  
+    srli    t2, t1, 20
+    andi    t2, t2, 0x1F  
 
     # 读取 misaligned 地址
-    csrr t3, mtval     # t3 = misaligned store address
+    csrr    t3, mtval  
 
     # 读取 rs2 的值
-    slli t4, t2, 2     # 计算 rs2 在栈中的偏移量 (rs2 * 4)
-    add t4, sp, t4
-    lw t5, 0(t4)       # t5 = rs2 的值
+    slli    t4, t2, 2
+    add     t4, sp, t4
+    lw      t5, 0(t4)   # 取出 rs2 的值
 
-    # **拆分 `rs2` 并存入 `mtval`**
-    sb t5, 0(t3)       # 存储低 8 位
-    srli t5, t5, 8
-    sb t5, 1(t3)       # 存储第二个字节
-    srli t5, t5, 8
-    sb t5, 2(t3)       # 存储第三个字节
-    srli t5, t5, 8
-    sb t5, 3(t3)       # 存储最高字节
+    # 拆分 32 位存储到 misaligned 地址
+    sb      t5, 0(t3)
+    srli    t5, t5, 8
+    sb      t5, 1(t3)
+    srli    t5, t5, 8
+    sb      t5, 2(t3)
+    srli    t5, t5, 8
+    sb      t5, 3(t3)
 
-    # **模拟 `fail` 的 `lw`**
-    lb t6, 0(t3)       # 读取 byte0
-    lb t7, 1(t3)       # 读取 byte1
-    slli t7, t7, 8
-    or t6, t6, t7
+    # 跳过错误指令
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
 
-    lb t7, 2(t3)       # 读取 byte2
-    slli t7, t7, 16
-    or t6, t6, t7
-
-    lb t7, 3(t3)       # 读取 byte3
-    slli t7, t7, 24
-    or t6, t6, t7
-
-    # **存入临时寄存器，防止 `lw` 读取错误**
-    sw t6, 0(t3)
-
-    # **跳过故障指令**
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-
-    # **恢复寄存器并跳转到 `_trap_fail` 终止**
-    j        fail
+    j       restore_registers
 
 
-# 5) Restore all registers, then mret return
+# 6) Restore registers and return
+restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
     lw      x4, 16(sp)
@@ -309,51 +284,8 @@ handle_misaligned_store:
     lw      x31, 124(sp)
 
     addi    sp, sp, 128
-
-# Restore original stack pointer
     csrrw   sp, mscratch, sp
-
-# Return from trap
     mret
-
-fail:
-    # Restore registers
-    lw      x0,   0(sp)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
-    lw      x10, 40(sp)
-    lw      x11, 44(sp)
-    lw      x12, 48(sp)
-    lw      x13, 52(sp)
-    lw      x14, 56(sp)
-    lw      x15, 60(sp)
-    lw      x16, 64(sp)
-    lw      x17, 68(sp)
-    lw      x18, 72(sp)
-    lw      x19, 76(sp)
-    lw      x20, 80(sp)
-    lw      x21, 84(sp)
-    lw      x22, 88(sp)
-    lw      x23, 92(sp)
-    lw      x24, 96(sp)
-    lw      x25,100(sp)
-    lw      x26,104(sp)
-    lw      x27,108(sp)
-    lw      x28,112(sp)
-    lw      x29,116(sp)
-    lw      x30,120(sp)
-    lw      x31,124(sp)
-    addi    sp, sp, 128
-
-    csrrw   sp, mscratch, sp
-    j       terminate
 
 
 
