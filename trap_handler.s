@@ -128,143 +128,186 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 __mtrap:
-    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
-    csrrw sp, mscratch, sp
+    # Exchange user stack pointer with kernel stack pointer
+    csrrw a0, mscratch, a0
 
-    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
-    addi sp, sp, -128
-    sw x0, 0(sp)
-    sw x1, 4(sp)
-    sw x2, 8(sp) # Save sp (x2)
-    sw x3, 12(sp)
-    sw x4, 16(sp)
-    sw x5, 20(sp)
-    sw x6, 24(sp)
-    sw x7, 28(sp)
-    sw x8, 32(sp)
-    sw x9, 36(sp)
-    sw x10, 40(sp)
-    sw x11, 44(sp)
-    sw x12, 48(sp)
-    sw x13, 52(sp)
-    sw x14, 56(sp)
-    sw x15, 60(sp)
-    sw x16, 64(sp)
-    sw x17, 68(sp)
-    sw x18, 72(sp)
-    sw x19, 76(sp)
-    sw x20, 80(sp)
-    sw x21, 84(sp)
-    sw x22, 88(sp)
-    sw x23, 92(sp)
-    sw x24, 96(sp)
-    sw x25, 100(sp)
-    sw x26, 104(sp)
-    sw x27, 108(sp)
-    sw x28, 112(sp)
-    sw x29, 116(sp)
-    sw x30, 120(sp)
-    sw x31, 124(sp)
+    # Allocate space on kernel stack for all registers
+    addi a0, a0, -128
+    
+    # Store all registers to kernel stack
+    sw x0, 0(a0)
+    sw x1, 4(a0)
+    sw x2, 8(a0)
+    sw x3, 12(a0)
+    sw x4, 16(a0)
+    sw x5, 20(a0)
+    sw x6, 24(a0)
+    sw x7, 28(a0)
+    sw x8, 32(a0)
+    sw x9, 36(a0)
+    sw x10, 40(a0)
+    sw x11, 44(a0)
+    sw x12, 48(a0)
+    sw x13, 52(a0)
+    sw x14, 56(a0)
+    sw x15, 60(a0)
+    sw x16, 64(a0)
+    sw x17, 68(a0)
+    sw x18, 72(a0)
+    sw x19, 76(a0)
+    sw x20, 80(a0)
+    sw x21, 84(a0)
+    sw x22, 88(a0)
+    sw x23, 92(a0)
+    sw x24, 96(a0)
+    sw x25, 100(a0)
+    sw x26, 104(a0)
+    sw x27, 108(a0)
+    sw x28, 112(a0)
+    sw x29, 116(a0)
+    sw x30, 120(a0)
+    sw x31, 124(a0)
+    
+    # Examine trap cause
+    csrr s1, mcause
+    srli s2, s1, 31     # Extract interrupt bit
+    bnez s2, abort_handler
+    
+    # Check if trap is a misaligned load (code 4)
+    andi s1, s1, 0x7F
+    li s2, 4
+    bne s1, s2, abort_handler
+    
+    # Get faulting instruction
+    csrr s3, mepc
+    csrr s4, mtval      # Get misaligned address
+    
+    # Check if this is an instruction fetch issue
+    beq s3, s4, abort_handler
+    
+    # Load the faulting instruction
+    lw s5, 0(s3)
+    
+    # Check if it's an lw instruction
+    # Check opcode (bits 0-6)
+    andi s6, s5, 0x7F
+    li s7, 0x03         # LOAD opcode
+    bne s6, s7, abort_handler
+    
+    # Check function code (bits 12-14)
+    srli s6, s5, 12
+    andi s6, s6, 0x7
+    li s7, 2            # lw funct3
+    bne s6, s7, abort_handler
+    
+    # Extract destination register (rd) - bits 7-11
+    srli s6, s5, 7
+    andi s6, s6, 0x1F
+    
+    # Read 4 bytes sequentially from misaligned address
+    lbu s7, 0(s4)       # First byte (LSB)
+    lbu s8, 1(s4)       # Second byte
+    slli s8, s8, 8
+    or s7, s7, s8
+    lbu s8, 2(s4)       # Third byte
+    slli s8, s8, 16
+    or s7, s7, s8
+    lbu s8, 3(s4)       # Fourth byte (MSB)
+    slli s8, s8, 24
+    or s7, s7, s8       # s7 now contains the 32-bit value
+    
+    # Compute address in register save area and store value
+    slli s8, s6, 2      # s8 = rd * 4
+    add s8, a0, s8      # s8 = stack + offset
+    sw s7, 0(s8)        # Store to register save area
+    
+    # Special handling for SP register (x2)
+    li s9, 2
+    bne s6, s9, skip_sp_adjustment
+    lw s9, 8(a0)        # Load original SP value from save area
+    csrw mscratch, s9   # Update mscratch
+skip_sp_adjustment:
+    
+    # Advance program counter past the faulting instruction
+    addi s3, s3, 4
+    csrw mepc, s3
+    
+    j restore_regs
+    
+abort_handler:
+    # Pass to default exception handler
+    lw x1, 4(a0)
+    lw x3, 12(a0)
+    lw x4, 16(a0)
+    lw x5, 20(a0)
+    lw x6, 24(a0)
+    lw x7, 28(a0)
+    lw x8, 32(a0)
+    lw x9, 36(a0)
+    lw x10, 40(a0)
+    lw x11, 44(a0)
+    lw x12, 48(a0)
+    lw x13, 52(a0)
+    lw x14, 56(a0)
+    lw x15, 60(a0)
+    lw x16, 64(a0)
+    lw x17, 68(a0)
+    lw x18, 72(a0)
+    lw x19, 76(a0)
+    lw x20, 80(a0)
+    lw x21, 84(a0)
+    lw x22, 88(a0)
+    lw x23, 92(a0)
+    lw x24, 96(a0)
+    lw x25, 100(a0)
+    lw x26, 104(a0)
+    lw x27, 108(a0)
+    lw x28, 112(a0)
+    lw x29, 116(a0)
+    lw x30, 120(a0)
+    lw x31, 124(a0)
+    addi a0, a0, 128
+    csrrw a0, mscratch, a0
+    j terminate
 
-    # 3) Check trap cause (mcause)
-    # If not "misaligned load", go to terminate
-    csrr t0, mcause
-    li t1, 4 # 4 = misaligned load
-    bne t0, t1, terminate
-
-    # 4) Handle misaligned load:
-    # Check if the faulting address is the instruction pointer (jump instruction)
-    csrr t0, mepc # t0 = instruction address
-    csrr t1, mtval # t1 = faulting address
-    beq t0, t1, terminate # If faulting address == mepc, it was an instruction fetch, terminate
-
-    # 4a) Read faulting instruction, get rd
-    lw t1, 0(t0) # t1 = faulting instruction
-
-    # Verify this is a lw instruction by checking opcode and funct3
-    # Extract opcode: bits 0-6
-    andi t5, t1, 0x7f # t5 = opcode
-    li t6, 0x3 # LOAD opcode (0000011)
-    bne t5, t6, terminate # If not a LOAD opcode, terminate
-
-    # Extract funct3: bits 12-14
-    srli t5, t1, 12
-    andi t5, t5, 0x7 # t5 = funct3
-    li t6, 0x2 # lw funct3 (010)
-    bne t5, t6, terminate # If not lw funct3, terminate
-
-    # lw format: opcode[6:0] | rd[11:7] | funct3[14:12] | rs1[19:15] | imm[31:20]
-    # rd = (instruction >> 7) & 0x1F
-    srli t2, t1, 7
-    andi t2, t2, 0x1F # t2 now holds rd
-
-    # 4b) Get misaligned address
-    csrr t3, mtval # t3 = misaligned address
-
-    # 4c) Read 4 bytes sequentially (using lb+andi to zero-extend)
-    lb t4, 0(t3) # byte0 (lowest)
-    andi t4, t4, 0xFF
-    lb t5, 1(t3) # byte1
-    andi t5, t5, 0xFF
-    slli t5, t5, 8
-    or t4, t4, t5
-    lb t5, 2(t3) # byte2
-    andi t5, t5, 0xFF
-    slli t5, t5, 16
-    or t4, t4, t5
-    lb t5, 3(t3) # byte3 (highest)
-    andi t5, t5, 0xFF
-    slli t5, t5, 24
-    or t4, t4, t5
-
-    # 4d) Write back to save area
-    # Save area starts at sp, each register is 4 bytes, offset = rd*4
-    slli t2, t2, 2
-    add t2, sp, t2
-    sw t4, 0(t2)
-
-    # 4e) Skip faulting instruction (mepc += 4)
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    j return
-
-return:
-    # 5) Restore all registers, then mret
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    addi sp, sp, 128
+restore_regs:
+    # Restore all registers
+    lw x1, 4(a0)
+    lw x3, 12(a0)
+    lw x4, 16(a0)
+    lw x5, 20(a0)
+    lw x6, 24(a0)
+    lw x7, 28(a0)
+    lw x8, 32(a0)
+    lw x9, 36(a0)
+    lw x10, 40(a0)
+    lw x11, 44(a0)
+    lw x12, 48(a0)
+    lw x13, 52(a0)
+    lw x14, 56(a0)
+    lw x15, 60(a0)
+    lw x16, 64(a0)
+    lw x17, 68(a0)
+    lw x18, 72(a0)
+    lw x19, 76(a0)
+    lw x20, 80(a0)
+    lw x21, 84(a0)
+    lw x22, 88(a0)
+    lw x23, 92(a0)
+    lw x24, 96(a0)
+    lw x25, 100(a0)
+    lw x26, 104(a0)
+    lw x27, 108(a0)
+    lw x28, 112(a0)
+    lw x29, 116(a0)
+    lw x30, 120(a0)
+    lw x31, 124(a0)
+    addi a0, a0, 128
+    
     # Restore original stack pointer
-    csrrw sp, mscratch, sp
-    # Return from trap
+    csrrw a0, mscratch, a0
+    
+    # Return from exception
     mret
 
 
