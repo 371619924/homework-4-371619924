@@ -174,8 +174,7 @@ __mtrap:
     srli    a1, a0, 31         # 提取最高位到a1
     bnez    a1, _trap_fail     # 如果是中断，不处理
 
-    # 获取异常代码（无需清除中断位）
-    # 由于我们已经检查了中断位，直接使用低位
+    # 检查具体的异常类型
     li      a1, 4              # 未对齐加载代码
     beq     a0, a1, handle_misaligned_load
     li      a1, 6              # 未对齐存储代码
@@ -198,7 +197,7 @@ handle_misaligned_load:
     csrr    a5, mtval          # 未对齐地址
     
     # 使用对齐访问和位运算合成读取结果
-    andi    t0, a5, ~0x3       # 对齐地址（低两位置0）
+    andi    t0, a5, -4         # 对齐地址（低两位置0，使用-4即0xFFFFFFFC）
     lw      t1, 0(t0)          # 读取第一个对齐字
     lw      t2, 4(t0)          # 读取第二个对齐字
     
@@ -288,9 +287,6 @@ handle_misaligned_store:
     j       advance_pc
 
 _trap_fail:
-    # 使用完全不同于message.txt的恢复方式
-    # 逐段恢复ABI命名的寄存器组
-    
     # 恢复控制寄存器
     lw      ra,   0(sp)
     lw      gp,   8(sp)
@@ -335,6 +331,7 @@ _trap_fail:
     # 跳转到终止程序
     j       terminate
 
+    
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
