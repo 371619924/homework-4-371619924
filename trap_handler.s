@@ -127,7 +127,7 @@ __mstart:
 ### Trap handler
 
 ### You will need to write your own trap handler functionality here.
-_mtrap:
+__mtrap:
     # Swap stack pointer with mscratch
     csrrw sp, mscratch, sp
 
