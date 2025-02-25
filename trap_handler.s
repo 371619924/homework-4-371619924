@@ -171,7 +171,7 @@ __mtrap:
     # Check cause of trap
     csrr t0, mcause
     li t1, 4          # Load misaligned code
-    bne t0, t1, terminate    # If not misaligned load, terminate
+    bne t0, t1, not_misaligned_load    # If not misaligned load, restore and terminate
 
     # Get faulting instruction
     csrr t0, mepc      # Get instruction pointer
@@ -210,6 +210,9 @@ __mtrap:
     addi t0, t0, 4
     csrw mepc, t0
 
+    # Fall through to restore registers and return
+
+not_misaligned_load:
     # Restore all registers
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -246,9 +249,13 @@ __mtrap:
     # Restore original stack pointer
     csrrw sp, mscratch, sp
 
-    # Return from trap
-    mret
+    # For non-misaligned load exceptions, jump to terminate after restoring
+    csrr t0, mcause
+    li t1, 4
+    bne t0, t1, terminate
 
+    # Return from trap (only for misaligned load)
+    mret
 
 
 # This code is taken from the default VRV system code. It prints out
