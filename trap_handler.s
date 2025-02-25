@@ -132,7 +132,7 @@ __mtrap:
     # Swap kernel stack
     csrrw   sp, mscratch, sp
     
-    # Save registers (optimized layout)
+    # Save registers
     addi    sp, sp, -128
     sw      ra,   4(sp)
     sw      sp,   8(sp)
@@ -166,7 +166,7 @@ __mtrap:
     sw      t5, 120(sp)
     sw      t6, 124(sp)
     
-    # Check trap cause
+    # Get trap cause
     csrr    t0, mcause
     li      t1, 4           # Load address fault
     beq     t0, t1, handle_load
@@ -179,50 +179,59 @@ handle_load:
     csrr    t0, mepc
     lw      t1, 0(t0)
     
-    # Check opcode
+    # Check opcode (0x03 for loads)
     andi    t2, t1, 0x7F
-    li      t3, 0x03        # LOAD opcode
+    li      t3, 0x03
     bne     t2, t3, terminate
     
-    # Extract funct3 and destination register
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7     # funct3
-    srli    t3, t1, 7
-    andi    t3, t3, 0x1F    # rd
+    # Extract funct3 (load type), rs1 (base reg), and rd (destination)
+    srli    t3, t1, 12
+    andi    t3, t3, 0x7     # funct3
+    srli    t4, t1, 15
+    andi    t4, t4, 0x1F    # rs1
+    srli    t5, t1, 7
+    andi    t5, t5, 0x1F    # rd
     
-    # Get fault address and perform the load
+    # Get rs1 value from saved registers
+    slli    t6, t4, 2
+    add     t6, sp, t6
+    lw      t6, 0(t6)       # t6 = rs1 value
+    
+    # Get fault address from mtval CSR
     csrr    t4, mtval
     
-    # Handle different load types based on funct3
-    li      t5, 2           # lw
-    beq     t2, t5, load_word
-    j       terminate       # Unsupported load type
+    # Handle based on load type (funct3)
+    li      t0, 2           # lw
+    beq     t3, t0, load_word
+    
+    # Add handlers for other load types if needed
+    j       terminate       # Default: unsupported load type
     
 load_word:
-    # Load individual bytes
-    lbu     t5, 0(t4)
-    lbu     t6, 1(t4)
-    lbu     a0, 2(t4)
-    lbu     a1, 3(t4)
+    # Load individual bytes from unaligned address
+    lbu     t0, 0(t4)
+    lbu     t1, 1(t4)
+    lbu     t2, 2(t4)
+    lbu     t3, 3(t4)
     
-    # Combine bytes
-    slli    t6, t6, 8
-    or      t5, t5, t6
-    slli    a0, a0, 16
-    or      t5, t5, a0
-    slli    a1, a1, 24
-    or      t5, t5, a1
+    # Combine bytes into a word (little-endian)
+    slli    t1, t1, 8
+    or      t0, t0, t1
+    slli    t2, t2, 16
+    or      t0, t0, t2
+    slli    t3, t3, 24
+    or      t0, t0, t3
     
-    # Store to destination register's saved location
-    slli    t6, t3, 2
-    add     t6, sp, t6
-    sw      t5, 0(t6)
+    # Store result to destination register's saved location
+    slli    t1, t5, 2
+    add     t1, sp, t1
+    sw      t0, 0(t1)
     
-    # Update mscratch if rd is sp
-    li      a0, 2
-    bne     t3, a0, advance_pc
-    lw      t5, 8(sp)
-    csrw    mscratch, t5
+    # If rd is sp (x2), update mscratch
+    li      t2, 2
+    bne     t5, t2, advance_pc
+    lw      t0, 8(sp)
+    csrw    mscratch, t0
     j       advance_pc
     
 handle_store:
@@ -230,39 +239,48 @@ handle_store:
     csrr    t0, mepc
     lw      t1, 0(t0)
     
-    # Check opcode
+    # Check opcode (0x23 for stores)
     andi    t2, t1, 0x7F
-    li      t3, 0x23        # STORE opcode
+    li      t3, 0x23
     bne     t2, t3, terminate
     
-    # Extract funct3, rs2, and base register
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7     # funct3
-    srli    t3, t1, 20
-    andi    t3, t3, 0x1F    # rs2 (source)
+    # Extract funct3 (store type), rs1 (base reg), and rs2 (source)
+    srli    t3, t1, 12
+    andi    t3, t3, 0x7     # funct3
+    srli    t4, t1, 15
+    andi    t4, t4, 0x1F    # rs1
+    srli    t5, t1, 20
+    andi    t5, t5, 0x1F    # rs2
     
-    # Get fault address
-    csrr    t4, mtval
+    # Get rs1 value from saved registers
+    slli    t6, t4, 2
+    add     t6, sp, t6
+    lw      t6, 0(t6)       # t6 = rs1 value
     
-    # Handle different store types based on funct3
-    li      t5, 2           # sw
-    beq     t2, t5, store_word
-    j       terminate       # Unsupported store type
+    # Get rs2 value from saved registers
+    slli    t4, t5, 2
+    add     t4, sp, t4
+    lw      t4, 0(t4)       # t4 = rs2 value (value to store)
+    
+    # Get fault address from mtval CSR
+    csrr    t5, mtval
+    
+    # Handle based on store type (funct3)
+    li      t0, 2           # sw
+    beq     t3, t0, store_word
+    
+    # Add handlers for other store types if needed
+    j       terminate       # Default: unsupported store type
     
 store_word:
-    # Get the value to store from rs2's saved location
-    slli    t5, t3, 2
-    add     t5, sp, t5
-    lw      t6, 0(t5)       # rs2 value
-    
-    # Store individual bytes
-    sb      t6, 0(t4)
-    srli    t6, t6, 8
-    sb      t6, 1(t4)
-    srli    t6, t6, 8
-    sb      t6, 2(t4)
-    srli    t6, t6, 8
-    sb      t6, 3(t4)
+    # Store individual bytes to unaligned address
+    sb      t4, 0(t5)       # Store lowest byte
+    srli    t0, t4, 8
+    sb      t0, 1(t5)       # Store second byte
+    srli    t0, t4, 16
+    sb      t0, 2(t5)       # Store third byte
+    srli    t0, t4, 24
+    sb      t0, 3(t5)       # Store highest byte
     
 advance_pc:
     # Advance to next instruction
