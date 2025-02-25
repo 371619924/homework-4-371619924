@@ -170,29 +170,9 @@ __mtrap:
 
     # Check cause of trap
     csrr t0, mcause
-    
-    # Branch based on exception code
-    li t1, 0          # Misaligned instruction address
-    beq t0, t1, handle_misaligned_instruction
-    
-    li t1, 4          # Misaligned load address
-    beq t0, t1, handle_misaligned_load
-    
-    li t1, 6          # Misaligned store address
-    beq t0, t1, handle_misaligned_store
-    
-    # If none of the above, terminate
-    j terminate
+    li t1, 4          # Load misaligned code
+    bne t0, t1, terminate    # If not misaligned load, terminate
 
-handle_misaligned_instruction:
-    # Fix misaligned instruction pointer without reading from it
-    csrr t0, mepc
-    andi t0, t0, -4   # Align to word boundary (clear bottom 2 bits)
-    addi t0, t0, 4    # Move to next instruction
-    csrw mepc, t0
-    j restore_and_return
-
-handle_misaligned_load:
     # Get faulting instruction
     csrr t0, mepc      # Get instruction pointer
     lw t1, 0(t0)        # Get instruction
@@ -229,65 +209,7 @@ handle_misaligned_load:
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-    j restore_and_return
 
-handle_misaligned_store:
-    # Get faulting instruction
-    csrr t0, mepc      # Get instruction pointer
-    lw t1, 0(t0)        # Get instruction
-
-    # Extract source register
-    srli t2, t1, 20     # Shift right to get rs2
-    andi t2, t2, 0x1f    # Mask to get 5 bits
-
-    # Get the value from the source register
-    slli t2, t2, 2      # Multiply rs2 by 4 for offset
-    add t2, sp, t2      # Get stack location
-    lw t6, 0(t2)        # Load source value
-
-    # Get misaligned address and word-aligned addresses
-    csrr t3, mtval      # Get misaligned address
-    andi t4, t3, 0x3     # Get offset within word (0-3)
-    andi t5, t3, -4      # Get word-aligned address (clear bottom 2 bits)
-
-    # For a word store across a word boundary
-    # Split the word into two parts and store them
-    lw a0, 0(t5)        # Load word at aligned address
-    lw a1, 4(t5)        # Load next word
-    
-    # Calculate bit offsets
-    slli a2, t4, 3      # Convert byte offset to bits (multiply by 8)
-    li a3, 32           # Bits in a word
-    sub a3, a3, a2      # Bits in first word
-    
-    # Create masks for both parts
-    li a4, -1           # All ones
-    srl a5, a4, a3      # Mask for first word (upper bits)
-    not a5, a5          # Invert mask to clear bits
-    sll a6, a4, a2      # Mask for second word (lower bits)
-    not a6, a6          # Invert mask to clear bits
-    
-    # Clear the target bits and insert new bits
-    and a0, a0, a5      # Clear in first word
-    and a1, a1, a6      # Clear in second word
-    
-    sll a7, t6, a2      # Shift for first word
-    or a0, a0, a7       # Insert in first word
-    
-    srl a7, t6, a3      # Shift for second word
-    or a1, a1, a7       # Insert in second word
-    
-    # Store the updated words
-    sw a0, 0(t5)
-    sw a1, 4(t5)
-
-    # Increment mepc to next instruction
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    j restore_and_return
-
-restore_and_return:
     # Restore all registers
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -326,7 +248,6 @@ restore_and_return:
 
     # Return from trap
     mret
-
 
 
 
