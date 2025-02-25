@@ -211,9 +211,10 @@ __mtrap:
     sw      t0, 0(a1)
 
     li      t0, 2
-    bne     a7, t0, Skip
+    bne     a7, t0, skip
     lw      t0, 8(sp)       
     csrw    mscratch, t0
+
 skip:
 
      
