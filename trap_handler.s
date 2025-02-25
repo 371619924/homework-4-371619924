@@ -127,145 +127,167 @@ __mstart:
 ### Trap handler
 
 ### You will need to write your own trap handler functionality here.
+_mtrap:
+# Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+csrrw sp, mscratch, sp
+
+# Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+
+
+addi sp, sp, -128
+sw x0, 0(sp)
+sw x1, 4(sp)
+sw x2, 8(sp)    # Save sp (x2)
+sw x3, 12(sp)
+sw x4, 16(sp)
+sw x5, 20(sp)
+sw x6, 24(sp)
+sw x7, 28(sp)
+sw x8, 32(sp)
+sw x9, 36(sp)
+sw x10, 40(sp)
+sw x11, 44(sp)
+sw x12, 48(sp)
+sw x13, 52(sp)
+sw x14, 56(sp)
+sw x15, 60(sp)
+sw x16, 64(sp)
+sw x17, 68(sp)
+sw x18, 72(sp)
+sw x19, 76(sp)
+sw x20, 80(sp)
+sw x21, 84(sp)
+sw x22, 88(sp)
+sw x23, 92(sp)
+sw x24, 96(sp)
+sw x25, 100(sp)
+sw x26, 104(sp)
+sw x27, 108(sp)
+sw x28, 112(sp)
+sw x29, 116(sp)
+sw x30, 120(sp)
+sw x31, 124(sp)
+
+# Check trap cause (mcause)
+csrr t0, mcause
+li t1, 4    # 4 = misaligned load
+beq t0, t1, handle_misaligned_load
+li t1, 6    # 6 = misaligned store
+beq t0, t1, handle_misaligned_store
+j terminate
+
+handle_misaligned_load:
+# Get the instruction at mepc
+csrr t0, mepc
+lw t1, 0(t0)
+
+# Extract destination register (rd)
+srli t2, t1, 7
+andi t2, t2, 0x1F     # t2 = rd
+
+# Get misaligned address
+csrr t3, mtval
+
+# Load 4 bytes sequentially and assemble 32-bit value
+lbu t4, 0(t3)         # byte0 (least significant)
+lbu t5, 1(t3)         # byte1
+slli t5, t5, 8
+or t4, t4, t5
+lbu t5, 2(t3)         # byte2
+slli t5, t5, 16
+or t4, t4, t5
+lbu t5, 3(t3)         # byte3 (most significant)
+slli t5, t5, 24
+or t4, t4, t5
+
+# Write back to saved register area
+slli t2, t2, 2        # t2 = rd * 4
+add t2, sp, t2        # t2 = address of saved rd
+sw t4, 0(t2)          # Store assembled value
+
+# Skip the faulting instruction
+csrr t0, mepc
+addi t0, t0, 4
+csrw mepc, t0
+
+j restore_registers
+
+handle_misaligned_store:
+# Get the instruction at mepc
+csrr t0, mepc
+lw t1, 0(t0)
+
+# Extract source register (rs2)
+srli t2, t1, 20
+andi t2, t2, 0x1F     # t2 = rs2
+
+# Get value to store from saved register area
+slli t3, t2, 2        # t3 = rs2 * 4
+add t3, sp, t3        # t3 = address of saved rs2
+lw t4, 0(t3)          # t4 = value to store
+
+# Get misaligned address
+csrr t5, mtval
+
+# Store 4 bytes individually
+sb t4, 0(t5)          # byte0 (least significant)
+srli t4, t4, 8
+sb t4, 1(t5)          # byte1
+srli t4, t4, 8
+sb t4, 2(t5)          # byte2
+srli t4, t4, 8
+sb t4, 3(t5)          # byte3 (most significant)
+
+# Skip the faulting instruction
+csrr t0, mepc
+addi t0, t0, 4
+csrw mepc, t0
+
+# Fall through to restore_registers
+
+restore_registers:
+# Restore all registers
+lw x1, 4(sp)
+lw x3, 12(sp)
+lw x4, 16(sp)
+lw x5, 20(sp)
+lw x6, 24(sp)
+lw x7, 28(sp)
+lw x8, 32(sp)
+lw x9, 36(sp)
+lw x10, 40(sp)
+lw x11, 44(sp)
+lw x12, 48(sp)
+lw x13, 52(sp)
+lw x14, 56(sp)
+lw x15, 60(sp)
+lw x16, 64(sp)
+lw x17, 68(sp)
+lw x18, 72(sp)
+lw x19, 76(sp)
+lw x20, 80(sp)
+lw x21, 84(sp)
+lw x22, 88(sp)
+lw x23, 92(sp)
+lw x24, 96(sp)
+lw x25, 100(sp)
+lw x26, 104(sp)
+lw x27, 108(sp)
+lw x28, 112(sp)
+lw x29, 116(sp)
+lw x30, 120(sp)
+lw x31, 124(sp)
+
+addi sp, sp, 128
+
+# Restore original stack pointer
+csrrw sp, mscratch, sp
+
+# Return from trap
+mret
 
 
 
-__mtrap:
-    # 1. 切换到内核栈
-    csrrw   sp, mscratch, sp
-
-    # 2. 保存所有寄存器（共 128 字节）
-    addi    sp, sp, -128
-    sw      x0,   0(sp)
-    sw      x1,   4(sp)
-    sw      x2,   8(sp)
-    sw      x3,  12(sp)
-    sw      x4,  16(sp)
-    sw      x5,  20(sp)
-    sw      x6,  24(sp)
-    sw      x7,  28(sp)
-    sw      x8,  32(sp)
-    sw      x9,  36(sp)
-    sw      x10, 40(sp)
-    sw      x11, 44(sp)
-    sw      x12, 48(sp)
-    sw      x13, 52(sp)
-    sw      x14, 56(sp)
-    sw      x15, 60(sp)
-    sw      x16, 64(sp)
-    sw      x17, 68(sp)
-    sw      x18, 72(sp)
-    sw      x19, 76(sp)
-    sw      x20, 80(sp)
-    sw      x21, 84(sp)
-    sw      x22, 88(sp)
-    sw      x23, 92(sp)
-    sw      x24, 96(sp)
-    sw      x25,100(sp)
-    sw      x26,104(sp)
-    sw      x27,108(sp)
-    sw      x28,112(sp)
-    sw      x29,116(sp)
-    sw      x30,120(sp)
-    sw      x31,124(sp)
-
-    # 3. 取 mcause（屏蔽最高位中断标志），若不是 misaligned load (4) 则跳转到 trap_fail
-    csrr    t0, mcause
-    li      t1, 0x7FFFFFFF
-    and     t0, t0, t1
-    li      t1, 4
-    bne     t0, t1, _trap_fail
-
-    # 4. 读取故障指令（在 mepc 所指地址处）
-    csrr    t2, mepc
-    lw      t3, 0(t2)        # t3 为 faulting 指令
-
-    # 检查 opcode：最低 7 位应为 0x03 (lw)
-    andi    t4, t3, 0x7F
-    li      t5, 0x03
-    bne     t4, t5, _trap_fail
-
-    # 检查 funct3：指令位 14~12 应为 2（lw 的 funct3 = 010）
-    srai    t6, t3, 12
-    andi    t6, t6, 0x7
-    li      t5, 2
-    bne     t6, t5, _trap_fail
-
-    # 5. 从指令中提取 rd（指令位 11~7）
-    srli    a1, t3, 7
-    andi    a1, a1, 0x1F    # a1 = rd
-    mv      a7, a1          # 保存 rd 到 a7
-
-    # 6. 从 mtval 中取得错误访问地址，并按字节拼接成 32 位数据
-    csrr    t6, mtval
-    lbu     t0, 0(t6)
-    lbu     t1, 1(t6)
-    lbu     t2, 2(t6)
-    lbu     t3, 3(t6)
-    slli    t1, t1, 8
-    slli    t2, t2, 16
-    slli    t3, t3, 24
-    or      t0, t0, t1
-    or      t0, t0, t2
-    or      t0, t0, t3
-
-    # 7. 将修正后的数据写回保存区中对应 rd 的位置
-    slli    a1, a7, 2       # 计算 rd*4
-    add     a1, sp, a1
-    sw      t0, 0(a1)
-
-    # 8. 如果 rd==x2（即 rd==2），更新 mscratch 为原始用户栈指针（原 sp 保存在 offset 8 处）
-    li      t0, 2
-    bne     a7, t0, skip
-    lw      t0, 8(sp)       # 取出原始 x2
-    csrw    mscratch, t0
-skip:
-
-    # 9. 跳过故障指令（mepc += 4）
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    # 10. 恢复所有寄存器并返回
-    lw      x0,   0(sp)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
-    lw      x10, 40(sp)
-    lw      x11, 44(sp)
-    lw      x12, 48(sp)
-    lw      x13, 52(sp)
-    lw      x14, 56(sp)
-    lw      x15, 60(sp)
-    lw      x16, 64(sp)
-    lw      x17, 68(sp)
-    lw      x18, 72(sp)
-    lw      x19, 76(sp)
-    lw      x20, 80(sp)
-    lw      x21, 84(sp)
-    lw      x22, 88(sp)
-    lw      x23, 92(sp)
-    lw      x24, 96(sp)
-    lw      x25,100(sp)
-    lw      x26,104(sp)
-    lw      x27,108(sp)
-    lw      x28,112(sp)
-    lw      x29,116(sp)
-    lw      x30,120(sp)
-    lw      x31,124(sp)
-    addi    sp, sp, 128
-
-    csrrw   sp, mscratch, sp
-    mret
-
-_trap_fail:
-    j       terminate
 
 
 # This code is taken from the default VRV system code. It prints out
