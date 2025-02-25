@@ -131,13 +131,14 @@ __mstart:
 
 
 __mtrap:
-    
+    # 1. 切换到内核栈
     csrrw   sp, mscratch, sp
 
+    # 2. 保存所有寄存器（共 128 字节）
     addi    sp, sp, -128
-    sw      x0,  0(sp)
-    sw      x1,  4(sp)
-    sw      x2,  8(sp)    # 保存 x2，即原始 sp
+    sw      x0,   0(sp)
+    sw      x1,   4(sp)
+    sw      x2,   8(sp)
     sw      x3,  12(sp)
     sw      x4,  16(sp)
     sw      x5,  20(sp)
@@ -160,60 +161,75 @@ __mtrap:
     sw      x22, 88(sp)
     sw      x23, 92(sp)
     sw      x24, 96(sp)
-    sw      x25, 100(sp)
-    sw      x26, 104(sp)
-    sw      x27, 108(sp)
-    sw      x28, 112(sp)
-    sw      x29, 116(sp)
-    sw      x30, 120(sp)
-    sw      x31, 124(sp)
+    sw      x25,100(sp)
+    sw      x26,104(sp)
+    sw      x27,108(sp)
+    sw      x28,112(sp)
+    sw      x29,116(sp)
+    sw      x30,120(sp)
+    sw      x31,124(sp)
 
-    csrr    t0, mcause        # ← 新增这行，从 mcause 中获取异常码
-    li      t1, 4             # 4 表示 misaligned load
-    bne     t0, t1, terminate
+    # 3. 取 mcause（屏蔽最高位中断标志），若不是 misaligned load (4) 则跳转到 trap_fail
+    csrr    t0, mcause
+    li      t1, 0x7FFFFFFF
+    and     t0, t0, t1
+    li      t1, 4
+    bne     t0, t1, _trap_fail
 
-    li     t1, 6               # 6 = misaligned store
-    beq    t0, t1, terminate
+    # 4. 读取故障指令（在 mepc 所指地址处）
+    csrr    t2, mepc
+    lw      t3, 0(t2)        # t3 为 faulting 指令
 
-    # 4a) 读取故障指令，获取 rd
-    csrr    t0, mepc          # t0 = 故障指令地址
-    lw      t1, 0(t0)         # t1 = 故障指令 (lw)
-    
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F      # t2 = rd
+    # 检查 opcode：最低 7 位应为 0x03 (lw)
+    andi    t4, t3, 0x7F
+    li      t5, 0x03
+    bne     t4, t5, _trap_fail
 
-    # 4b) 获取错位地址
-    csrr    t3, mtval         # t3 = 错位地址
+    # 检查 funct3：指令位 14~12 应为 2（lw 的 funct3 = 010）
+    srai    t6, t3, 12
+    andi    t6, t6, 0x7
+    li      t5, 2
+    bne     t6, t5, _trap_fail
 
-    # 4c) 依次读4字节 (利用 lb+andi 进行零扩展)
-    lb      t4, 0(t3)         # byte0（最低位）
-    andi    t4, t4, 0xFF
-    lb      t5, 1(t3)         # byte1
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 8
-    or      t4, t4, t5
+    # 5. 从指令中提取 rd（指令位 11~7）
+    srli    a1, t3, 7
+    andi    a1, a1, 0x1F    # a1 = rd
+    mv      a7, a1          # 保存 rd 到 a7
 
-    lb      t5, 2(t3)         # byte2
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 16
-    or      t4, t4, t5
+    # 6. 从 mtval 中取得错误访问地址，并按字节拼接成 32 位数据
+    csrr    t6, mtval
+    lbu     t0, 0(t6)
+    lbu     t1, 1(t6)
+    lbu     t2, 2(t6)
+    lbu     t3, 3(t6)
+    slli    t1, t1, 8
+    slli    t2, t2, 16
+    slli    t3, t3, 24
+    or      t0, t0, t1
+    or      t0, t0, t2
+    or      t0, t0, t3
 
-    lb      t5, 3(t3)         # byte3（最高位）
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 24
-    or      t4, t4, t5
+    # 7. 将修正后的数据写回保存区中对应 rd 的位置
+    slli    a1, a7, 2       # 计算 rd*4
+    add     a1, sp, a1
+    sw      t0, 0(a1)
 
-    # 4d) 将修正后的数据写回到保存区
-    slli    t2, t2, 2         # 计算 rd 对应的偏移
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    # 8. 如果 rd==x2（即 rd==2），更新 mscratch 为原始用户栈指针（原 sp 保存在 offset 8 处）
+    li      t0, 2
+    bne     a7, t0, skip
+    lw      t0, 8(sp)       # 取出原始 x2
+    csrw    mscratch, t0
+skip:
 
-    # 4e) 跳过故障指令 (mepc += 4)
+    # 9. 跳过故障指令（mepc += 4）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    lw      x1,  4(sp)
+    # 10. 恢复所有寄存器并返回
+    lw      x0,   0(sp)
+    lw      x1,   4(sp)
+    lw      x2,   8(sp)
     lw      x3,  12(sp)
     lw      x4,  16(sp)
     lw      x5,  20(sp)
@@ -236,21 +252,20 @@ __mtrap:
     lw      x22, 88(sp)
     lw      x23, 92(sp)
     lw      x24, 96(sp)
-    lw      x25, 100(sp)
-    lw      x26, 104(sp)
-    lw      x27, 108(sp)
-    lw      x28, 112(sp)
-    lw      x29, 116(sp)
-    lw      x30, 120(sp)
-    lw      x31, 124(sp)
+    lw      x25,100(sp)
+    lw      x26,104(sp)
+    lw      x27,108(sp)
+    lw      x28,112(sp)
+    lw      x29,116(sp)
+    lw      x30,120(sp)
+    lw      x31,124(sp)
     addi    sp, sp, 128
 
-    # 恢复原始栈指针
     csrrw   sp, mscratch, sp
-
-    # 从 trap 返回
     mret
 
+_trap_fail:
+    j       terminate
 
 
 # This code is taken from the default VRV system code. It prints out
