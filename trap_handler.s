@@ -129,14 +129,21 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 __mtrap:
-    # Swap SP and mscratch to get trap stack
+    # 1. 切换到陷入时使用的栈
     csrrw sp, mscratch, sp
 
-    # Save all registers to preserve state (128 bytes)
+    # 2. 检查 trap 原因。如果不是 misaligned load（mcause != 4），直接 terminate。
+    csrr    t0, mcause
+    li      t1, 4                 # 表示“misaligned load” 的异常号
+    bne     t0, t1, terminate     # 不相等就直接跳转到 terminate
+
+    # 3. 如果确实是 misaligned load，才继续执行后续的保存寄存器、修补逻辑。
+
+    # Save all registers to preserve state
     addi sp, sp, -128
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)   # Save sp (x2)
+    sw x2, 8(sp)  # Save sp (x2)
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -167,59 +174,44 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # Check cause of trap: if it is a misaligned load (code==4) then handle it
-    csrr t0, mcause
-    li   t1, 4          # Misaligned load word code
-    beq  t0, t1, misaligned_handler  # 若为 misaligned load，跳转处理
+    # 以下为对齐修补逻辑（与原代码相同）
 
-not_misaligned:
-    # 非 misaligned load：恢复寄存器后直接跳转至 terminate
-    j restore_and_terminate
+    # Get faulting instruction
+    csrr t0, mepc      # Get instruction pointer
+    lw t1, 0(t0)       # Get instruction
 
-misaligned_handler:
-    # 处理 misaligned load trap
-
-    # 获取故障指令
-    csrr t0, mepc       # 取出出错指令地址
-    lw   t1, 0(t0)      # 取出指令
-
-    # 提取目的寄存器号 rd（指令位 11:7）
+    # Extract destination register
     srli t2, t1, 7
     andi t2, t2, 0x1f
 
-    # 取 misaligned 地址及对应对齐地址
-    csrr t3, mtval      # 出错地址
-    andi t4, t3, 0x3    # 取字内偏移（0-3）
-    andi t5, t3, -4     # 对齐地址（清除低 2 位）
+    # Get misaligned address and word-aligned addresses
+    csrr t3, mtval
+    andi t4, t3, 0x3
+    andi t5, t3, -4
 
-    # 取出包含数据的两个对齐字
-    lw   t6, 0(t5)      # 第一个字
-    lw   a0, 4(t5)      # 第二个字
+    # Load both aligned words that contain our data
+    lw t6, 0(t5)
+    lw a0, 4(t5)
 
-    # 计算偏移对应的位数（乘8）
+    # Calculate number of bits to shift based on offset
     slli t4, t4, 3
+    srl t6, t6, t4
+    li t1, 32
+    sub t1, t1, t4
+    sll a0, a0, t1
+    or t6, t6, a0
 
-    # 从对齐字中提取数据
-    srl  t6, t6, t4
-    li   t1, 32
-    sub  t1, t1, t4
-    sll  a0, a0, t1
-    or   t6, t6, a0     # 得到完整数据
+    # Store the result in the original destination register location
+    slli t2, t2, 2
+    add t2, sp, t2
+    sw t6, 0(t2)
 
-    # 将结果存回保存的寄存器位置中
-    slli t2, t2, 2      # rd * 4
-    add  t2, sp, t2
-    sw   t6, 0(t2)
-
-    # 增加 mepc 跳过本指令
+    # Increment mepc to next instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
 
-    # 完成 misaligned 补丁处理后，恢复寄存器并返回
-    j restore_and_return
-
-restore_and_terminate:
+    # Restore all registers
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -252,47 +244,10 @@ restore_and_terminate:
     lw x31, 124(sp)
     addi sp, sp, 128
 
-    # 恢复原始栈指针
+    # Restore original stack pointer
     csrrw sp, mscratch, sp
 
-    j terminate
-
-restore_and_return:
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    addi sp, sp, 128
-
-    # 恢复原始栈指针
-    csrrw sp, mscratch, sp
-
+    # Return from trap
     mret
 
 
