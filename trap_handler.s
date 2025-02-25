@@ -131,20 +131,20 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # Swap SP and mscratch to get kernel stack
     csrrw   sp, mscratch, sp
 
-# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # Save all registers on the kernel stack
     addi    sp, sp, -128
-    sw      x1, 4(sp)
-    sw      x2, 8(sp)
-    sw      x3, 12(sp)
-    sw      x4, 16(sp)
-    sw      x5, 20(sp)
-    sw      x6, 24(sp)
-    sw      x7, 28(sp)
-    sw      x8, 32(sp)
-    sw      x9, 36(sp)
+    sw      x1,   4(sp)
+    sw      x2,   8(sp)
+    sw      x3,  12(sp)
+    sw      x4,  16(sp)
+    sw      x5,  20(sp)
+    sw      x6,  24(sp)
+    sw      x7,  28(sp)
+    sw      x8,  32(sp)
+    sw      x9,  36(sp)
     sw      x10, 40(sp)
     sw      x11, 44(sp)
     sw      x12, 48(sp)
@@ -160,113 +160,88 @@ __mtrap:
     sw      x22, 88(sp)
     sw      x23, 92(sp)
     sw      x24, 96(sp)
-    sw      x25, 100(sp)
-    sw      x26, 104(sp)
-    sw      x27, 108(sp)
-    sw      x28, 112(sp)
-    sw      x29, 116(sp)
-    sw      x30, 120(sp)
-    sw      x31, 124(sp)
+    sw      x25,100(sp)
+    sw      x26,104(sp)
+    sw      x27,108(sp)
+    sw      x28,112(sp)
+    sw      x29,116(sp)
+    sw      x30,120(sp)
+    sw      x31,124(sp)
 
-# 3) Check trap cause (mcause)
+    # Check mcause
     csrr    t0, mcause
-    li      t1, 4    # 4 = misaligned load
+    li      t1, 4
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6    # 6 = misaligned store
+    li      t1, 6
     beq     t0, t1, handle_misaligned_store
-    j       terminate  # 如果不是 misaligned load/store，终止
+    j       terminate  
 
-# 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # 读取故障指令
+    lw      t1, 0(t0)
 
-    # 提取目标寄存器 rd
+    # Extract rd
     srli    t2, t1, 7
     andi    t2, t2, 0x1F  
 
-    # 读取 misaligned 地址
+    # Read misaligned address
     csrr    t3, mtval  
-    andi    t6, t3, 0x3    # 计算 misalignment 偏移量 (t6 = mtval % 4)
-    sub     t3, t3, t6     # 计算对齐后的地址 (aligned_addr = mtval - (mtval % 4))
 
-    # **使用 `lb` 以支持 `signed extension`**
-    lb      t4, 0(t3)  
-    lb      t5, 1(t3)
+    # Load and reconstruct word
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
-
-    lb      t5, 2(t3)
+    lhu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lb      t5, 3(t3)
-    slli    t5, t5, 24
-    or      t4, t4, t5
-
-    # **右移数据，使其与 `mtval` 偏移量对齐**
-    slli    t6, t6, 3   # t6 = t6 * 8
-    srl     t4, t4, t6  # 右移 t6 * 8 位
-
-    # 存回目标寄存器（保存在栈中）
+    # Store result into rd
     slli    t2, t2, 2
     add     t2, sp, t2
     sw      t4, 0(t2)
 
-    # 跳过错误指令
-    csrr    t0, mepc
+    # Advance mepc
     addi    t0, t0, 4
     csrw    mepc, t0
-
     j       restore_registers
 
-
-# 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # 读取故障指令
+    lw      t1, 0(t0)
 
-    # 提取 rs2（存储的值来源寄存器）
+    # Extract rs2
     srli    t2, t1, 20
     andi    t2, t2, 0x1F  
 
-    # 读取 misaligned 地址
+    # Read misaligned address
     csrr    t3, mtval  
-    andi    t6, t3, 0x3    # 计算 misalignment 偏移量 (t6 = mtval % 4)
-    sub     t3, t3, t6     # 计算对齐后的地址 (aligned_addr = mtval - (mtval % 4))
 
-    # 读取 rs2 的值
+    # Load rs2 value from stack
     slli    t4, t2, 2
     add     t4, sp, t4
-    lw      t5, 0(t4)   # 取出 rs2 的值
+    lw      t5, 0(t4)
 
-    # **调整存储字节位置**
-    sb      t5, 0(t3)   
-    srli    t5, t5, 8
-    sb      t5, 1(t3)   
-    srli    t5, t5, 8
-    sb      t5, 2(t3)   
-    srli    t5, t5, 8
-    sb      t5, 3(t3)   
+    # Store word in misaligned address
+    sh      t5, 0(t3)
+    srli    t5, t5, 16
+    sh      t5, 2(t3)
 
-    # 跳过错误指令
-    csrr    t0, mepc
+    # Advance mepc
     addi    t0, t0, 4
     csrw    mepc, t0
-
     j       restore_registers
 
-
-# 6) Restore registers and return
 restore_registers:
-    lw      x1, 4(sp)
-    lw      x3, 12(sp)
-    lw      x4, 16(sp)
-    lw      x5, 20(sp)
-    lw      x6, 24(sp)
-    lw      x7, 28(sp)
-    lw      x8, 32(sp)
-    lw      x9, 36(sp)
+    lw      x1,   4(sp)
+    lw      x2,   8(sp)
+    lw      x3,  12(sp)
+    lw      x4,  16(sp)
+    lw      x5,  20(sp)
+    lw      x6,  24(sp)
+    lw      x7,  28(sp)
+    lw      x8,  32(sp)
+    lw      x9,  36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
@@ -282,18 +257,18 @@ restore_registers:
     lw      x22, 88(sp)
     lw      x23, 92(sp)
     lw      x24, 96(sp)
-    lw      x25, 100(sp)
-    lw      x26, 104(sp)
-    lw      x27, 108(sp)
-    lw      x28, 112(sp)
-    lw      x29, 116(sp)
-    lw      x30, 120(sp)
-    lw      x31, 124(sp)
-
+    lw      x25,100(sp)
+    lw      x26,104(sp)
+    lw      x27,108(sp)
+    lw      x28,112(sp)
+    lw      x29,116(sp)
+    lw      x30,120(sp)
+    lw      x31,124(sp)
     addi    sp, sp, 128
+
+    # Restore sp
     csrrw   sp, mscratch, sp
     mret
-
 
 
 
