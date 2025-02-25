@@ -176,16 +176,13 @@ __mtrap:
     and     t0, t0, t1
     li      t1, 4
     bne     t0, t1, terminate
-# 4a) Read faulting instruction
-    csrr    t0, mepc                                                          # t0 = instruction address
-    lw      t1, 0(t0)                                                         # t1 = faulting instruction
 
-# Extract opcode (bits 6: 0)
-    andi    t4, t1, 0x7F                                                      # opcode = t1[6: 0]
+    csrr    t2, mepc
+    lw      t3, 0(t2)
 
-# Check if opcode is lw (0000011 = 0x03)
-    li      t5, 0x03                                                          # lw opcode
-    bne     t4, t5, terminate                                                 # If not lw, terminate
+    andi    t4, t3, 0x7F
+    li      t5, 0x03
+    bne     t4, t5, terminate
 
 # Extract funct3 (bits 14: 12)
     srli    t4, t1, 12
