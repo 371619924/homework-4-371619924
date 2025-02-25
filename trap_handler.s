@@ -129,15 +129,8 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 __mtrap:
-    # 1. 切换到陷入时使用的栈
+    # Swap SP and mscratch to get trap stack
     csrrw sp, mscratch, sp
-
-    # 2. 检查 trap 原因。如果不是 misaligned load（mcause != 4），直接 terminate。
-    csrr    t0, mcause
-    li      t1, 4                 # 表示“misaligned load” 的异常号
-    bne     t0, t1, terminate     # 不相等就直接跳转到 terminate
-
-    # 3. 如果确实是 misaligned load，才继续执行后续的保存寄存器、修补逻辑。
 
     # Save all registers to preserve state
     addi sp, sp, -128
@@ -174,37 +167,42 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
 
-    # 以下为对齐修补逻辑（与原代码相同）
+    # Check cause of trap
+    csrr t0, mcause
+    li t1, 4          # Load misaligned code
+    bne t0, t1, terminate    # If not misaligned load, terminate
 
     # Get faulting instruction
     csrr t0, mepc      # Get instruction pointer
-    lw t1, 0(t0)       # Get instruction
+    lw t1, 0(t0)        # Get instruction
 
     # Extract destination register
-    srli t2, t1, 7
-    andi t2, t2, 0x1f
+    srli t2, t1, 7      # Shift right to get rd
+    andi t2, t2, 0x1f    # Mask to get 5 bits
 
     # Get misaligned address and word-aligned addresses
-    csrr t3, mtval
-    andi t4, t3, 0x3
-    andi t5, t3, -4
+    csrr t3, mtval      # Get misaligned address
+    andi t4, t3, 0x3     # Get offset within word (0-3)
+    andi t5, t3, -4      # Get word-aligned address (clear bottom 2 bits)
 
     # Load both aligned words that contain our data
-    lw t6, 0(t5)
-    lw a0, 4(t5)
+    lw t6, 0(t5)        # Load first word
+    lw a0, 4(t5)        # Load next word
 
     # Calculate number of bits to shift based on offset
-    slli t4, t4, 3
-    srl t6, t6, t4
-    li t1, 32
-    sub t1, t1, t4
-    sll a0, a0, t1
-    or t6, t6, a0
+    slli t4, t4, 3      # Convert byte offset to bits (multiply by 8)
+
+    # Extract bytes from the aligned words
+    srl t6, t6, t4      # Right shift first word by offset
+    li t1, 32           # Bits in a word
+    sub t1, t1, t4      # Calculate complementary shift
+    sll a0, a0, t1      # Left shift second word
+    or t6, t6, a0        # Combine the parts to get our value
 
     # Store the result in the original destination register location
-    slli t2, t2, 2
-    add t2, sp, t2
-    sw t6, 0(t2)
+    slli t2, t2, 2      # Multiply rd by 4 for offset
+    add t2, sp, t2      # Get stack location
+    sw t6, 0(t2)        # Save result
 
     # Increment mepc to next instruction
     csrr t0, mepc
@@ -249,6 +247,7 @@ __mtrap:
 
     # Return from trap
     mret
+
 
 
 
