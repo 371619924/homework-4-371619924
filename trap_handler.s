@@ -195,10 +195,10 @@ __mtrap:
 
     csrr    t6, mtval      
 
-    lbu     t0, 0(t6)       
-    lbu     t1, 1(t6)       
-    lbu     t2, 2(t6)       
-    lbu     t3, 3(t6)      
+    lb     t0, 0(t6)       
+    lb     t1, 1(t6)       
+    lb     t2, 2(t6)       
+    lb     t3, 3(t6)      
     slli    t1, t1, 8
     slli    t2, t2, 16
     slli    t3, t3, 24
