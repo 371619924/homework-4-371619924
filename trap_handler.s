@@ -128,7 +128,7 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
-exception_vector_entry:
+__mtrap:
     # Switch to kernel stack
     csrrw   sp, mscratch, sp
     
