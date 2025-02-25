@@ -226,7 +226,35 @@ __mtrap:
     addi    t0, t0, 4
     csrw    mepc, t0
 
-# 5) Restore all registers, then mret return
+handle_misaligned_store:
+    csrr    t0, mepc          # 读取 faulting 指令地址
+    lw      t1, 0(t0)         # 读取 faulting 指令 (sw/sh/sb)
+    csrr    t3, mtval         # 读取 misaligned 地址
+
+    # 解析 store 指令，找到 rs2 (source register)
+    srli    t2, t1, 20        # rs2 在 bit [24:20]
+    andi    t2, t2, 0x1F      # t2 = rs2
+
+    # 计算 rs2 在保存区域的偏移 (sp + rs2*4)
+    slli    t2, t2, 2
+    add     t2, sp, t2
+    lw      t4, 0(t2)         # t4 = 要存储的值 (rs2 的值)
+
+    # 逐字节写入目标地址
+    sb      t4, 0(t3)
+    srli    t4, t4, 8
+    sb      t4, 1(t3)
+    srli    t4, t4, 8
+    sb      t4, 2(t3)
+    srli    t4, t4, 8
+    sb      t4, 3(t3)
+
+    # 跳过 faulting 指令 (mepc += 4)
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+
+    # 直接恢复寄存器并返回
     lw      x1, 4(sp)
     lw      x3, 12(sp)
     lw      x4, 16(sp)
@@ -257,14 +285,14 @@ __mtrap:
     lw      x29, 116(sp)
     lw      x30, 120(sp)
     lw      x31, 124(sp)
-
     addi    sp, sp, 128
 
-# Restore original stack pointer
+    # 恢复原始 sp
     csrrw   sp, mscratch, sp
 
-# Return from trap
+    # 返回
     mret
+
 
 fail:
 
@@ -304,36 +332,7 @@ fail:
 
     csrrw   sp, mscratch, sp
     j       terminate
-    
-handle_misaligned_store:
-    csrr    t0, mepc          # 读取 faulting 指令地址
-    lw      t1, 0(t0)         # 读取 faulting 指令 (sw/sh/sb)
-    csrr    t3, mtval         # 读取 misaligned 地址
 
-    # 解析 store 指令，找到 rs2 (source register)
-    srli    t2, t1, 20        # rs2 在 bit [24:20]
-    andi    t2, t2, 0x1F      # t2 = rs2
-
-    # 计算 rs2 在保存区域的偏移 (sp + rs2*4)
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    lw      t4, 0(t2)         # t4 = 要存储的值 (rs2 的值)
-
-    # 逐字节写入目标地址
-    sb      t4, 0(t3)
-    srli    t4, t4, 8
-    sb      t4, 1(t3)
-    srli    t4, t4, 8
-    sb      t4, 2(t3)
-    srli    t4, t4, 8
-    sb      t4, 3(t3)
-
-    # 跳过 faulting 指令 (mepc += 4)
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    j       restore_registers
 
 
 
