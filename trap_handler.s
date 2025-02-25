@@ -130,142 +130,174 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 __mtrap:
-# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
-csrrw sp, mscratch, sp
+# Swap SP and mscratch to get kernel stack
+    csrrw   sp, mscratch, sp
 
-# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
-addi sp, sp, -128
-sw x0, 0(sp)
-sw x1, 4(sp)
-sw x2, 8(sp)    # Save sp (x2)
-sw x3, 12(sp)
-sw x4, 16(sp)
-sw x5, 20(sp)
-sw x6, 24(sp)
-sw x7, 28(sp)
-sw x8, 32(sp)
-sw x9, 36(sp)
-sw x10, 40(sp)
-sw x11, 44(sp)
-sw x12, 48(sp)
-sw x13, 52(sp)
-sw x14, 56(sp)
-sw x15, 60(sp)
-sw x16, 64(sp)
-sw x17, 68(sp)
-sw x18, 72(sp)
-sw x19, 76(sp)
-sw x20, 80(sp)
-sw x21, 84(sp)
-sw x22, 88(sp)
-sw x23, 92(sp)
-sw x24, 96(sp)
-sw x25, 100(sp)
-sw x26, 104(sp)
-sw x27, 108(sp)
-sw x28, 112(sp)
-sw x29, 116(sp)
-sw x30, 120(sp)
-sw x31, 124(sp)
+# Save all registers on the kernel stack
+    addi    sp, sp, -128
+    sw      x0, 0(sp)
+    sw      x1, 4(sp)
+    sw      x2, 8(sp)
+    sw      x3, 12(sp)
+    sw      x4, 16(sp)
+    sw      x5, 20(sp)
+    sw      x6, 24(sp)
+    sw      x7, 28(sp)
+    sw      x8, 32(sp)
+    sw      x9, 36(sp)
+    sw      x10, 40(sp)
+    sw      x11, 44(sp)
+    sw      x12, 48(sp)
+    sw      x13, 52(sp)
+    sw      x14, 56(sp)
+    sw      x15, 60(sp)
+    sw      x16, 64(sp)
+    sw      x17, 68(sp)
+    sw      x18, 72(sp)
+    sw      x19, 76(sp)
+    sw      x20, 80(sp)
+    sw      x21, 84(sp)
+    sw      x22, 88(sp)
+    sw      x23, 92(sp)
+    sw      x24, 96(sp)
+    sw      x25,100(sp)
+    sw      x26,104(sp)
+    sw      x27,108(sp)
+    sw      x28,112(sp)
+    sw      x29,116(sp)
+    sw      x30,120(sp)
+    sw      x31,124(sp)
 
-# 3) Check trap cause (mcause)
-# If not "misaligned load", go to terminate
-csrr t0, mcause
-li t1, 4    # 4 = misaligned load
-bne t0, t1, terminate
+    csrr    t0, mcause                                                        # 将 mcause 读入 t0
+    slli    t0, t0, 1                                                         # 左移 1 位，把最高位移出
+    srli    t0, t0, 1                                                         # 逻辑右移 1 位，填 0，从而恢复剩下的低位
+    li      t1, 4                                                             # 加载常数 4 到 t1
+    bne     t0, t1, fail                                                      # 如果 t0 不等于 4，则跳转到 _trap_fail
+    csrr    t2, mepc                                                          # 读取 mepc 到 t2
+    lw      t3, 0(t2)                                                         # 从 mepc 指向地址加载指令到 t3
+    andi    t4, t3, 0x7F                                                      # 取 t3 的低 7 位
+    xori    t4, t4, 0x03                                                      # 将低 7 位与 0x03 异或，若相等结果为 0
+    bnez    t4, fail                                                          #若结果非 0，则跳转到 _trap_fail
 
-# 4) Handle misaligned load:
-# First, read faulting instruction
-csrr t0, mepc         # t0 = instruction address
-lw t1, 0(t0)          # t1 = faulting instruction
+    srai    t6, t3, 12
+    andi    t6, t6, 0x7
+    li      t5, 2
+    bne     t6, t5, fail
 
-# 4a) Check if it's a load word instruction
-# Extract opcode and funct3
-andi t2, t1, 0x7F     # t2 = opcode (7 bits)
-li t3, 0x03           # lw opcode = 0x03 (0000011)
-bne t2, t3, terminate # Not a load instruction, terminate
+    mv      a0, t3
 
-srli t4, t1, 12       # Shift right to get funct3 in position
-andi t4, t4, 0x7      # t4 = funct3 (3 bits)
-li t5, 0x2            # lw funct3 = 0x2 (010)
-bne t4, t5, terminate # Not a lw instruction, terminate
+    srai    a1, a0, 7
+    andi    a1, a1, 0x1F
+    mv      a7, a1
 
-# 4b) Get rd (destination register)
-srli t2, t1, 7
-andi t2, t2, 0x1F     # t2 now holds rd
+    csrr    t6, mtval
 
-# 4c) Get misaligned address
-csrr t3, mtval        # t3 = misaligned address
+    lhu     t0, 0(t6)                                                         # 加载低 16 位
+    lhu     t1, 2(t6)                                                         # 加载高 16 位
+    slli    t1, t1, 16                                                        # 将高半字左移 16 位
+    or      t0, t0, t1                                                        # 合并成完整 32 位数据
 
-# 4d) Read 4 bytes sequentially (using lb+andi to zero-extend)
-lb t4, 0(t3)         # byte0 (lowest)
-andi t4, t4, 0xFF
+# 计算目标地址：a1 = sp + (a7 << 2)
+    slli    a1, a7, 2
+    add     a1, sp, a1
+    sw      t0, 0(a1)
 
-lb t5, 1(t3)         # byte1
-andi t5, t5, 0xFF
-slli t5, t5, 8
-or t4, t4, t5
+# 检查 a7 是否等于 2，若等于则更新 mscratch
+    li      t0, 2
+    xori    t1, a7, t0                                                        # 如果 a7 == 2，则 t1 结果为 0
+    bnez    t1, skip
+    lw      t0, 8(sp)                                                         # 从 sp+8 处加载原始 sp
+    csrw    mscratch, t0
+skip:
 
-lb t5, 2(t3)         # byte2
-andi t5, t5, 0xFF
-slli t5, t5, 16
-or t4, t4, t5
+# 增加 mepc 的值 4，跳过故障指令
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+fail:
+    # Restore registers
+    lw      x0,   0(sp)
+    lw      x1,   4(sp)
+    lw      x2,   8(sp)
+    lw      x3,  12(sp)
+    lw      x4,  16(sp)
+    lw      x5,  20(sp)
+    lw      x6,  24(sp)
+    lw      x7,  28(sp)
+    lw      x8,  32(sp)
+    lw      x9,  36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25,100(sp)
+    lw      x26,104(sp)
+    lw      x27,108(sp)
+    lw      x28,112(sp)
+    lw      x29,116(sp)
+    lw      x30,120(sp)
+    lw      x31,124(sp)
+    addi    sp, sp, 128
 
-lb t5, 3(t3)         # byte3 (highest)
-andi t5, t5, 0xFF
-slli t5, t5, 24
-or t4, t4, t5
+    csrrw   sp, mscratch, sp
+    j       terminate
 
-# 4e) Write back to save area
-# Save area starts at sp, each register is 4 bytes, offset = rd*4
-slli t2, t2, 2
-add t2, sp, t2
-sw t4, 0(t2)
+    # Restore all registers
+    lw      x0,   0(sp)
+    lw      x1,   4(sp)
+    lw      x2,   8(sp)
+    lw      x3,  12(sp)
+    lw      x4,  16(sp)
+    lw      x5,  20(sp)
+    lw      x6,  24(sp)
+    lw      x7,  28(sp)
+    lw      x8,  32(sp)
+    lw      x9,  36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25,100(sp)
+    lw      x26,104(sp)
+    lw      x27,108(sp)
+    lw      x28,112(sp)
+    lw      x29,116(sp)
+    lw      x30,120(sp)
+    lw      x31,124(sp)
+    addi    sp, sp, 128
 
-# 4f) Skip faulting instruction (mepc += 4)
-csrr t0, mepc
-addi t0, t0, 4
-csrw mepc, t0
+    csrrw   sp, mscratch, sp
 
-# 5) Restore all registers, then mret return
-lw x1, 4(sp)
-lw x3, 12(sp)
-lw x4, 16(sp)
-lw x5, 20(sp)
-lw x6, 24(sp)
-lw x7, 28(sp)
-lw x8, 32(sp)
-lw x9, 36(sp)
-lw x10, 40(sp)
-lw x11, 44(sp)
-lw x12, 48(sp)
-lw x13, 52(sp)
-lw x14, 56(sp)
-lw x15, 60(sp)
-lw x16, 64(sp)
-lw x17, 68(sp)
-lw x18, 72(sp)
-lw x19, 76(sp)
-lw x20, 80(sp)
-lw x21, 84(sp)
-lw x22, 88(sp)
-lw x23, 92(sp)
-lw x24, 96(sp)
-lw x25, 100(sp)
-lw x26, 104(sp)
-lw x27, 108(sp)
-lw x28, 112(sp)
-lw x29, 116(sp)
-lw x30, 120(sp)
-lw x31, 124(sp)
+    mret
 
-addi sp, sp, 128
 
-# Restore original stack pointer
-csrrw sp, mscratch, sp
 
-# Return from trap
-mret
+
+
+
+
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
