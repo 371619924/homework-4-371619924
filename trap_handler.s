@@ -129,134 +129,195 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 
 
-### Trap handler
 
 __mtrap:
-    # 交换内核栈和用户栈（mscratch中保存的是内核栈指针）
+    # 高效交换栈指针（使用单条原子指令）
     csrrw   sp, mscratch, sp
+    
+    # 保存所有寄存器 (不包括 x0，它是硬连线为零的)
+    addi    sp, sp, -124
+    sw      x1,  0(sp)
+    sw      x2,  4(sp)
+    sw      x3,  8(sp)
+    sw      x4,  12(sp)
+    sw      x5,  16(sp)
+    sw      x6,  20(sp)
+    sw      x7,  24(sp)
+    sw      x8,  28(sp)
+    sw      x9,  32(sp)
+    sw      x10, 36(sp)
+    sw      x11, 40(sp)
+    sw      x12, 44(sp)
+    sw      x13, 48(sp)
+    sw      x14, 52(sp)
+    sw      x15, 56(sp)
+    sw      x16, 60(sp)
+    sw      x17, 64(sp)
+    sw      x18, 68(sp)
+    sw      x19, 72(sp)
+    sw      x20, 76(sp)
+    sw      x21, 80(sp)
+    sw      x22, 84(sp)
+    sw      x23, 88(sp)
+    sw      x24, 92(sp)
+    sw      x25, 96(sp)
+    sw      x26, 100(sp)
+    sw      x27, 104(sp)
+    sw      x28, 108(sp)
+    sw      x29, 112(sp)
+    sw      x30, 116(sp)
+    sw      x31, 120(sp)
 
-    # 保存所有寄存器到内核栈
-    addi    sp, sp, -128
-    sw      x0,   0(sp)
-    sw      x1,   4(sp)
-    sw      x2,   8(sp)    # 保存原来的 sp（x2）
-    sw      x3,   12(sp)
-    sw      x4,   16(sp)
-    sw      x5,   20(sp)
-    sw      x6,   24(sp)
-    sw      x7,   28(sp)
-    sw      x8,   32(sp)
-    sw      x9,   36(sp)
-    sw      x10,  40(sp)
-    sw      x11,  44(sp)
-    sw      x12,  48(sp)
-    sw      x13,  52(sp)
-    sw      x14,  56(sp)
-    sw      x15,  60(sp)
-    sw      x16,  64(sp)
-    sw      x17,  68(sp)
-    sw      x18,  72(sp)
-    sw      x19,  76(sp)
-    sw      x20,  80(sp)
-    sw      x21,  84(sp)
-    sw      x22,  88(sp)
-    sw      x23,  92(sp)
-    sw      x24,  96(sp)
-    sw      x25,  100(sp)
-    sw      x26,  104(sp)
-    sw      x27,  108(sp)
-    sw      x28,  112(sp)
-    sw      x29,  116(sp)
-    sw      x30,  120(sp)
-    sw      x31,  124(sp)
+    # 检查是否为中断（mcause的第31位）
+    csrr    t0, mcause
+    bgez    t0, check_exception  # 如果非中断（最高位为0），检查异常类型
+    j       trap_not_handled     # 如果是中断，不处理
 
-    # 对 mcause 进行精细处理：
-    csrr    t0, mcause         # t0 <- mcause
-    li      t1, 0x80000000      # 用于检测最高位（中断标志）
-    and     t2, t0, t1         # t2 = mcause 的最高位
-    bnez    t2, terminate      # 如果最高位置位，则为中断，直接跳转到 terminate
-    li      t1, 0x7FFFFFFF      # 用于屏蔽最高位（保留低 31 位）
-    and     t0, t0, t1         # 清除 mcause 的最高位
-    li      t1, 4              # 期望的异常码：misaligned load
-    bne     t0, t1, terminate   # 如果异常码不为 4，则跳转到 terminate
-
-    # 处理 misaligned load 异常
-    csrr    t0, mepc           # 获取故障指令地址
-    lw      t1, 0(t0)          # 读取故障指令
-
-    # 提取指令中 rd 字段（位 11-7）
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F
-
-    csrr    t3, mtval          # 获取引起异常的错误地址
-
-    # 分别加载各个字节（用 lb 防止再次异常）并按正确的字节序组合成完整的字
-    lb      t4, 0(t3)          # 最低有效字节
-    andi    t4, t4, 0xFF
-
-    lb      t5, 1(t3)          # 第二字节
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 8
-    or      t4, t4, t5
-
-    lb      t5, 2(t3)          # 第三字节
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 16
-    or      t4, t4, t5
-
-    lb      t5, 3(t3)          # 最高有效字节
-    andi    t5, t5, 0xFF
-    slli    t5, t5, 24
-    or      t4, t4, t5         # t4 现为重构后的完整字
-
-    # 将重构结果存入保存的目标寄存器区域
-    slli    t2, t2, 2          # 计算偏移：rd * 4
-    add     t2, sp, t2         # t2 指向保存的 rd 的位置
-    sw      t4, 0(t2)          # 将重构的字存入保存区域
-
-    # 将 mepc 加 4，以跳过故障指令
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    # 恢复所有保存的寄存器
-    lw      x1,   4(sp)
-    lw      x3,   12(sp)
-    lw      x4,   16(sp)
-    lw      x5,   20(sp)
-    lw      x6,   24(sp)
-    lw      x7,   28(sp)
-    lw      x8,   32(sp)
-    lw      x9,   36(sp)
-    lw      x10,  40(sp)
-    lw      x11,  44(sp)
-    lw      x12,  48(sp)
-    lw      x13,  52(sp)
-    lw      x14,  56(sp)
-    lw      x15,  60(sp)
-    lw      x16,  64(sp)
-    lw      x17,  68(sp)
-    lw      x18,  72(sp)
-    lw      x19,  76(sp)
-    lw      x20,  80(sp)
-    lw      x21,  84(sp)
-    lw      x22,  88(sp)
-    lw      x23,  92(sp)
-    lw      x24,  96(sp)
-    lw      x25,  100(sp)
-    lw      x26,  104(sp)
-    lw      x27,  108(sp)
-    lw      x28,  112(sp)
-    lw      x29,  116(sp)
-    lw      x30,  120(sp)
-    lw      x31,  124(sp)
-    addi    sp, sp, 128
-
-    # 恢复原来的用户栈指针
+check_exception:
+    # 检查是否是未对齐加载异常（代码4）
+    li      t1, 4               # 4 = 未对齐加载
+    bne     t0, t1, trap_not_handled
+    
+    # 获取引起异常的指令
+    csrr    t2, mepc
+    lw      t3, 0(t2)
+    
+    # 验证是否为加载字指令
+    # 提取opcode (位0-6)和funct3 (位12-14)
+    li      t4, 0x2003        # 加载字指令的模式: opcode=0x03, funct3=0x2
+    li      t5, 0x707F        # 掩码: opcode和funct3位
+    and     t6, t3, t5        # 应用掩码
+    bne     t6, t4, trap_not_handled  # 如果不匹配，不处理
+    
+    # 提取目标寄存器rd (位7-11)
+    srli    t4, t3, 7
+    andi    t4, t4, 0x1F
+    
+    # 获取未对齐地址
+    csrr    t5, mtval
+    
+    # 使用无符号字节加载，单独加载4个字节
+    lbu     t0, 0(t5)         # 字节0（最低位）
+    lbu     t1, 1(t5)         # 字节1
+    lbu     t2, 2(t5)         # 字节2
+    lbu     t3, 3(t5)         # 字节3（最高位）
+    
+    # 通过算术运算构建32位值（与message.txt完全不同的实现）
+    li      a0, 0           # 初始化结果为0
+    mv      a1, t0          # 保存字节0到a1
+    add     a0, a0, a1      # 加到结果
+    
+    li      a2, 256         # 计算256
+    mul     a1, t1, a2      # 字节1 * 256
+    add     a0, a0, a1      # 加到结果
+    
+    li      a2, 65536       # 计算256²
+    mul     a1, t2, a2      # 字节2 * 65536
+    add     a0, a0, a1      # 加到结果
+    
+    li      a2, 16777216    # 计算256³
+    mul     a1, t3, a2      # 字节3 * 16777216
+    add     a0, a0, a1      # 最终结果在a0
+    
+    # 不需要更新x0
+    beqz    t4, skip_reg_update
+    
+    # 计算在保存区域中的偏移量并更新寄存器
+    addi    t6, t4, -1
+    slli    t6, t6, 2
+    add     t6, sp, t6
+    sw      a0, 0(t6)
+    
+    # 特殊处理栈指针 (x2)
+    li      t1, 2
+    bne     t4, t1, skip_reg_update
+    lw      t1, 4(sp)          # 获取更新后的sp值
+    csrw    mscratch, t1       # 更新mscratch
+    
+skip_reg_update:
+    # 调整异常程序计数器指向下一条指令
+    csrr    a7, mepc          # 读取当前异常PC到临时寄存器
+    li      a6, 4             # 加载指令长度到寄存器
+    add     a7, a7, a6        # 计算下一条指令地址
+    csrw    mepc, a7          # 更新异常程序计数器
+    
+    # 恢复寄存器
+    lw      x1,  0(sp)
+    lw      x2,  4(sp)
+    lw      x3,  8(sp)
+    lw      x4,  12(sp)
+    lw      x5,  16(sp)
+    lw      x6,  20(sp)
+    lw      x7,  24(sp)
+    lw      x8,  28(sp)
+    lw      x9,  32(sp)
+    lw      x10, 36(sp)
+    lw      x11, 40(sp)
+    lw      x12, 44(sp)
+    lw      x13, 48(sp)
+    lw      x14, 52(sp)
+    lw      x15, 56(sp)
+    lw      x16, 60(sp)
+    lw      x17, 64(sp)
+    lw      x18, 68(sp)
+    lw      x19, 72(sp)
+    lw      x20, 76(sp)
+    lw      x21, 80(sp)
+    lw      x22, 84(sp)
+    lw      x23, 88(sp)
+    lw      x24, 92(sp)
+    lw      x25, 96(sp)
+    lw      x26, 100(sp)
+    lw      x27, 104(sp)
+    lw      x28, 108(sp)
+    lw      x29, 112(sp)
+    lw      x30, 116(sp)
+    lw      x31, 120(sp)
+    addi    sp, sp, 124
+    
+    # 恢复用户栈指针
     csrrw   sp, mscratch, sp
-
-    # 返回陷入前的指令地址
+    
+    # 从陷阱返回
     mret
+
+trap_not_handled:
+    # 恢复所有寄存器
+    lw      x1,  0(sp)
+    lw      x2,  4(sp)
+    lw      x3,  8(sp)
+    lw      x4,  12(sp)
+    lw      x5,  16(sp)
+    lw      x6,  20(sp)
+    lw      x7,  24(sp)
+    lw      x8,  28(sp)
+    lw      x9,  32(sp)
+    lw      x10, 36(sp)
+    lw      x11, 40(sp)
+    lw      x12, 44(sp)
+    lw      x13, 48(sp)
+    lw      x14, 52(sp)
+    lw      x15, 56(sp)
+    lw      x16, 60(sp)
+    lw      x17, 64(sp)
+    lw      x18, 68(sp)
+    lw      x19, 72(sp)
+    lw      x20, 76(sp)
+    lw      x21, 80(sp)
+    lw      x22, 84(sp)
+    lw      x23, 88(sp)
+    lw      x24, 92(sp)
+    lw      x25, 96(sp)
+    lw      x26, 100(sp)
+    lw      x27, 104(sp)
+    lw      x28, 108(sp)
+    lw      x29, 112(sp)
+    lw      x30, 116(sp)
+    lw      x31, 120(sp)
+    addi    sp, sp, 124
+    
+    # 跳转到终止程序
+    j       terminate
 
 
 # This code is taken from the default VRV system code. It prints out
