@@ -211,11 +211,12 @@ __mtrap:
     
     # Update mscratch if rd is sp
     li      t6, 2
-    bne     t2, t6, 1f
+    bne     t2, t6, skip_mscratch
     lw      t4, 8(sp)
     csrw    mscratch, t4
     
-1:  # Advance to next instruction
+skip_mscratch:
+    # Advance to next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
@@ -256,13 +257,6 @@ __mtrap:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
-terminate:
-    # Just jump to terminate without restoring
-    addi    sp, sp, 128
-    csrrw   sp, mscratch, sp
-    j       terminate
-
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
