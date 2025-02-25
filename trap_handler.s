@@ -191,11 +191,47 @@ __mtrap:
     mv      a7, a1
 
     csrr    t6, mtval
+    andi    t1, t6, 0x3                                                       # 计算 misaligned 地址的偏移（t6 & 3）
+    sub     t6, t6, t1                                                        # 计算对齐的地址（对齐到 4 字节边界）
 
-    lhu     t0, 0(t6)                                                         # 加载低 16 位
-    lhu     t1, 2(t6)                                                         # 加载高 16 位
-    slli    t1, t1, 16                                                        # 将高半字左移 16 位
-    or      t0, t0, t1                                                        # 合并成完整 32 位数据
+    lw      t2, 0(t6)                                                         # 读取对齐地址的数据
+    lw      t3, 4(t6)                                                         # 读取下一个对齐地址的数据（如果需要）
+
+    beqz    t1, fix_misaligned
+    li      t4, 1
+    beq     t1, t4, misaligned_offset_1
+    li      t4, 2
+    beq     t1, t4, misaligned_offset_2
+    li      t4, 3
+    beq     t1, t4, misaligned_offset_3
+
+fix_misaligned:
+    mv      t0, t2                                                            # 数据已经对齐
+    j       store_fixed_value
+
+misaligned_offset_1:
+    srli    t4, t2, 8                                                         # 低 8 位丢弃
+    slli    t5, t3, 24                                                        # 高 24 位补上
+    or      t0, t4, t5                                                        # 合并数据
+    j       store_fixed_value
+
+misaligned_offset_2:
+    srli    t4, t2, 16                                                        # 低 16 位丢弃
+    slli    t5, t3, 16                                                        # 高 16 位补上
+    or      t0, t4, t5                                                        # 合并数据
+    j       store_fixed_value
+
+misaligned_offset_3:
+    srli    t4, t2, 24                                                        # 低 24 位丢弃
+    slli    t5, t3, 8                                                         # 高 8 位补上
+    or      t0, t4, t5                                                        # 合并数据
+    j       store_fixed_value
+
+store_fixed_value:
+    slli    a1, a7, 2                                                         # 计算目标寄存器存储地址
+    add     a1, sp, a1
+    sw      t0, 0(a1)                                                         # 存储修复的数据
+# 合并成完整 32 位数据
 
 # 计算目标地址：a1 = sp + (a7 << 2)
     slli    a1, a7, 2
@@ -204,7 +240,7 @@ __mtrap:
 
 # 检查 a7 是否等于 2，若等于则更新 mscratch
     li      t0, 2
-    xor    t1, a7, t0                                                        # 如果 a7 == 2，则 t1 结果为 0
+    xor     t1, a7, t0                                                        # 如果 a7 == 2，则 t1 结果为 0
     bnez    t1, skip
     lw      t0, 8(sp)                                                         # 从 sp+8 处加载原始 sp
     csrw    mscratch, t0
@@ -215,17 +251,17 @@ skip:
     addi    t0, t0, 4
     csrw    mepc, t0
 fail:
-    # Restore registers
-    lw      x0,   0(sp)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
+# Restore registers
+    lw      x0, 0(sp)
+    lw      x1, 4(sp)
+    lw      x2, 8(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
@@ -253,17 +289,17 @@ fail:
     csrrw   sp, mscratch, sp
     j       terminate
 
-    # Restore all registers
-    lw      x0,   0(sp)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
+# Restore all registers
+    lw      x0, 0(sp)
+    lw      x1, 4(sp)
+    lw      x2, 8(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
