@@ -173,7 +173,7 @@ _mtrap:
 # If not "misaligned load", go to terminate
     csrr    t0, mcause
     li      t1, 4                                                             # 4 = misaligned load
-    bne     t0, t1, fail1
+    bne     t0, t1, fail
 
 # 4) Handle misaligned load:
 # Read faulting instruction to get rd
