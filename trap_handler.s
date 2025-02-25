@@ -138,7 +138,7 @@ __mtrap:
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)                                                         # Save sp (x2)
+    sw      x2, 8(sp)   # Save sp (x2)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -171,44 +171,50 @@ __mtrap:
 
 # 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 4                                                             # 4 = misaligned load
+    li      t1, 4    # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6                                                             # 6 = misaligned store
+    li      t1, 6    # 6 = misaligned store
     beq     t0, t1, handle_misaligned_store
-    j       terminate                                                         # 如果不是 misaligned load/store，终止
+    j       terminate  # 如果不是 misaligned load/store，终止
 
 # 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)                                                         # 读取故障指令
+    lw      t1, 0(t0)   # 读取故障指令
 
-# 提取目标寄存器 rd
+    # 提取目标寄存器 rd
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F
+    andi    t2, t2, 0x1F  
 
-# 读取 misaligned 地址
-    csrr    t3, mtval
+    # 读取 misaligned 地址
+    csrr    t3, mtval  
+    andi    t6, t3, 0x3    # 计算 misalignment 偏移量 (t6 = mtval % 4)
+    sub     t3, t3, t6     # 计算对齐后的地址 (aligned_addr = mtval - (mtval % 4))
 
-# **修正：大端序读取**
-    lb      t4, 3(t3)                                                         # 最高字节
-    lb      t5, 2(t3)
+    # **读取对齐后的 4 字节数据**
+    lbu     t4, 0(t3)  
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lb      t5, 1(t3)
+    lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lb      t5, 0(t3)                                                         # 最低字节
+    lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-# 存回目标寄存器（保存在栈中）
+    # **正确右移，使其与 `mtval` 偏移量对齐**
+    slli    t6, t6, 3   # t6 = t6 * 8
+    srl     t4, t4, t6  # 右移 t6 * 8 位
+
+    # 存回目标寄存器（保存在栈中）
     slli    t2, t2, 2
     add     t2, sp, t2
     sw      t4, 0(t2)
 
-# 跳过错误指令
+    # 跳过错误指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
@@ -219,30 +225,36 @@ handle_misaligned_load:
 # 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)                                                         # 读取故障指令
+    lw      t1, 0(t0)   # 读取故障指令
 
-# 提取 rs2（存储的值来源寄存器）
+    # 提取 rs2（存储的值来源寄存器）
     srli    t2, t1, 20
-    andi    t2, t2, 0x1F
+    andi    t2, t2, 0x1F  
 
-# 读取 misaligned 地址
-    csrr    t3, mtval
+    # 读取 misaligned 地址
+    csrr    t3, mtval  
+    andi    t6, t3, 0x3    # 计算 misalignment 偏移量 (t6 = mtval % 4)
+    sub     t3, t3, t6     # 计算对齐后的地址 (aligned_addr = mtval - (mtval % 4))
 
-# 读取 rs2 的值
+    # 读取 rs2 的值
     slli    t4, t2, 2
     add     t4, sp, t4
-    lw      t5, 0(t4)                                                         # 取出 rs2 的值
+    lw      t5, 0(t4)   # 取出 rs2 的值
 
-# **修正：大端序存储**
-    sb      t5, 3(t3)                                                         # 最高字节
-    srli    t5, t5, 8
-    sb      t5, 2(t3)                                                         # 次高字节
-    srli    t5, t5, 8
-    sb      t5, 1(t3)                                                         # 次低字节
-    srli    t5, t5, 8
-    sb      t5, 0(t3)                                                         # 最低字节
+    # **正确调整存储位置**
+    slli    t6, t6, 3   # t6 = t6 * 8
+    srl     t5, t5, t6  # 右移 t6 * 8 位，使其对齐 `mtval`
 
-# 跳过错误指令
+    # **拆分 32 位存储到 misaligned 地址**
+    sb      t5, 0(t3)   
+    srli    t5, t5, 8
+    sb      t5, 1(t3)   
+    srli    t5, t5, 8
+    sb      t5, 2(t3)   
+    srli    t5, t5, 8
+    sb      t5, 3(t3)   
+
+    # 跳过错误指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
