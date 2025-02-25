@@ -214,7 +214,7 @@ __mtrap:
     bne     a7, t0, Skip
     lw      t0, 8(sp)       
     csrw    mscratch, t0
-skip
+skip:
 
      
     csrr    t0, mepc
