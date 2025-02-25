@@ -128,165 +128,147 @@ __mstart:
 
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
-__mtrap:
-    # 交换内核栈与当前栈
+exception_vector_entry:
+    # Switch to kernel stack
     csrrw   sp, mscratch, sp
     
-    # 分配栈空间
+    # Reserve stack space and save registers
     addi    sp, sp, -128
+    sw      ra,   4(sp)
+    sw      sp,   8(sp)
+    sw      gp,  12(sp)
+    sw      tp,  16(sp)
+    sw      t0,  20(sp)
+    sw      t1,  24(sp)
+    sw      t2,  28(sp)
+    sw      s0,  32(sp)
+    sw      s1,  36(sp)
+    sw      a0,  40(sp)
+    sw      a1,  44(sp)
+    sw      a2,  48(sp)
+    sw      a3,  52(sp)
+    sw      a4,  56(sp)
+    sw      a5,  60(sp)
+    sw      a6,  64(sp)
+    sw      a7,  68(sp)
+    sw      s2,  72(sp)
+    sw      s3,  76(sp)
+    sw      s4,  80(sp)
+    sw      s5,  84(sp)
+    sw      s6,  88(sp)
+    sw      s7,  92(sp)
+    sw      s8,  96(sp)
+    sw      s9, 100(sp)
+    sw      s10,104(sp)
+    sw      s11,108(sp)
+    sw      t3, 112(sp)
+    sw      t4, 116(sp)
+    sw      t5, 120(sp)
+    sw      t6, 124(sp)
     
-    # 保存所有寄存器
-    sw      zero, 0(sp)
-    sw      ra,   4(sp)  # x1
-    sw      sp,   8(sp)  # x2
-    sw      gp,  12(sp)  # x3
-    sw      tp,  16(sp)  # x4
-    sw      t0,  20(sp)  # x5
-    sw      t1,  24(sp)  # x6
-    sw      t2,  28(sp)  # x7
-    sw      s0,  32(sp)  # x8/fp
-    sw      s1,  36(sp)  # x9
-    sw      a0,  40(sp)  # x10
-    sw      a1,  44(sp)  # x11
-    sw      a2,  48(sp)  # x12
-    sw      a3,  52(sp)  # x13
-    sw      a4,  56(sp)  # x14
-    sw      a5,  60(sp)  # x15
-    sw      a6,  64(sp)  # x16
-    sw      a7,  68(sp)  # x17
-    sw      s2,  72(sp)  # x18
-    sw      s3,  76(sp)  # x19
-    sw      s4,  80(sp)  # x20
-    sw      s5,  84(sp)  # x21
-    sw      s6,  88(sp)  # x22
-    sw      s7,  92(sp)  # x23
-    sw      s8,  96(sp)  # x24
-    sw      s9, 100(sp)  # x25
-    sw      s10,104(sp)  # x26
-    sw      s11,108(sp)  # x27
-    sw      t3, 112(sp)  # x28
-    sw      t4, 116(sp)  # x29
-    sw      t5, 120(sp)  # x30
-    sw      t6, 124(sp)  # x31
+    # Get and check trap cause
+    csrr    t0, mcause
+    andi    t0, t0, 0x7FFFFFFF
+    li      t1, 4               # Load address fault code
+    bne     t0, t1, unhandled_exception_path
     
-    # 检查中断/异常原因
-    csrr    a0, mcause
-    srli    a1, a0, 31        # 检查最高位（中断vs异常）
-    bnez    a1, handle_interrupt
+    # Get the faulting instruction
+    csrr    t0, mepc
+    lw      t1, 0(t0)
     
-    # 处理异常情况
-    li      a2, 4             # 加载地址不对齐/错误代码
-    bne     a0, a2, exception_error
+    # Verify it's a load word (lw) instruction
+    andi    t2, t1, 0x7F
+    li      t3, 0x03            # LOAD opcode
+    bne     t2, t3, unhandled_exception_path
     
-    # 解析触发异常的指令
-    csrr    a3, mepc          # 获取触发异常的指令地址
-    lw      a4, 0(a3)         # 加载该指令
+    srli    t2, t1, 12
+    andi    t2, t2, 0x7
+    li      t3, 2               # LW funct3
+    bne     t2, t3, unhandled_exception_path
     
-    # 验证opcode是否为load指令(0x03)
-    li      a5, 0x7F
-    and     a6, a4, a5
-    li      a5, 0x03
-    bne     a6, a5, exception_error
+    # Extract destination register (rd)
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F
     
-    # 提取funct3字段（bits 12-14）验证是否为lw指令
-    srli    a6, a4, 12
-    andi    a6, a6, 0x7
-    li      a5, 2             # lw指令的funct3值
-    bne     a6, a5, exception_error
+    # Get fault address and perform manual load
+    csrr    t3, mtval
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
+    lbu     t6, 2(t3)
+    lbu     a0, 3(t3)
     
-    # 提取目标寄存器rd（bits 7-11）
-    srli    t0, a4, 7
-    andi    t0, t0, 0x1F      # 寄存器编号（0-31）
-    mv      t6, t0            # 保存目标寄存器编号
+    # Combine bytes into word
+    slli    t5, t5, 8
+    slli    t6, t6, 16
+    slli    a0, a0, 24
+    or      t4, t4, t5
+    or      t4, t4, t6
+    or      t4, t4, a0
     
-    # 从mtval获取实际加载地址
-    csrr    t1, mtval
+    # Store result to rd's saved location
+    slli    t5, t2, 2
+    add     t5, sp, t5
+    sw      t4, 0(t5)
     
-    # 手动执行加载操作（4字节）
-    lb      t2, 0(t1)
-    lb      t3, 1(t1)
-    lb      t4, 2(t1)
-    lb      t5, 3(t1)
+    # Update mscratch if rd was sp (x2)
+    li      t6, 2
+    bne     t2, t6, bypass_mscratch_modification
+    lw      t6, 8(sp)
+    csrw    mscratch, t6
     
-    # 组合字节为一个字
-    mv      a2, t2
-    slli    t3, t3, 8
-    or      a2, a2, t3
-    slli    t4, t4, 16
-    or      a2, a2, t4
-    slli    t5, t5, 24
-    or      a2, a2, t5
-    
-    # 将结果存入目标寄存器的保存位置
-    slli    t3, t6, 2
-    add     t3, sp, t3
-    sw      a2, 0(t3)
-    
-    # 如果目标是sp(x2)，则更新mscratch
-    li      t4, 2
-    bne     t6, t4, skip_mscratch
-    lw      t4, 8(sp)        # 获取原始sp值
-    csrw    mscratch, t4     # 更新mscratch
-    
-skip_mscratch:
-    # 指令指针前进到下一条指令
+bypass_mscratch_modification:
+    # Advance to next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
-    j       restore_exit
-
-handle_interrupt:
-    # 这里可以处理中断，但当前实现不处理
-    j       restore_exit
-
-exception_error:
-    # 处理不支持的异常类型
-    j       restore_exit
+    j       register_restoration_sequence
     
-restore_exit:
-    # 恢复所有寄存器
-    lw      ra,   4(sp)  # x1
-    # 不立即恢复sp(x2)
-    lw      gp,  12(sp)  # x3
-    lw      tp,  16(sp)  # x4
-    lw      t0,  20(sp)  # x5
-    lw      t1,  24(sp)  # x6
-    lw      t2,  28(sp)  # x7
-    lw      s0,  32(sp)  # x8
-    lw      s1,  36(sp)  # x9
-    lw      a0,  40(sp)  # x10
-    lw      a1,  44(sp)  # x11
-    lw      a2,  48(sp)  # x12
-    lw      a3,  52(sp)  # x13
-    lw      a4,  56(sp)  # x14
-    lw      a5,  60(sp)  # x15
-    lw      a6,  64(sp)  # x16
-    lw      a7,  68(sp)  # x17
-    lw      s2,  72(sp)  # x18
-    lw      s3,  76(sp)  # x19
-    lw      s4,  80(sp)  # x20
-    lw      s5,  84(sp)  # x21
-    lw      s6,  88(sp)  # x22
-    lw      s7,  92(sp)  # x23
-    lw      s8,  96(sp)  # x24
-    lw      s9, 100(sp)  # x25
-    lw      s10,104(sp)  # x26
-    lw      s11,108(sp)  # x27
-    lw      t3, 112(sp)  # x28
-    lw      t4, 116(sp)  # x29
-    lw      t5, 120(sp)  # x30
-    lw      t6, 124(sp)  # x31
+unhandled_exception_path:
+    # Trap couldn't be handled
+    j       register_restoration_sequence
     
-    # 释放栈空间
+register_restoration_sequence:
+    # Restore all registers
+    lw      ra,   4(sp)
+    # Skip restoring sp (x2) for now
+    lw      gp,  12(sp)
+    lw      tp,  16(sp)
+    lw      t0,  20(sp)
+    lw      t1,  24(sp)
+    lw      t2,  28(sp)
+    lw      s0,  32(sp)
+    lw      s1,  36(sp)
+    lw      a0,  40(sp)
+    lw      a1,  44(sp)
+    lw      a2,  48(sp)
+    lw      a3,  52(sp)
+    lw      a4,  56(sp)
+    lw      a5,  60(sp)
+    lw      a6,  64(sp)
+    lw      a7,  68(sp)
+    lw      s2,  72(sp)
+    lw      s3,  76(sp)
+    lw      s4,  80(sp)
+    lw      s5,  84(sp)
+    lw      s6,  88(sp)
+    lw      s7,  92(sp)
+    lw      s8,  96(sp)
+    lw      s9, 100(sp)
+    lw      s10,104(sp)
+    lw      s11,108(sp)
+    lw      t3, 112(sp)
+    lw      t4, 116(sp)
+    lw      t5, 120(sp)
+    lw      t6, 124(sp)
+    
+    # Restore stack pointer
     addi    sp, sp, 128
-    
-    # 恢复原始堆栈指针并返回
     csrrw   sp, mscratch, sp
     mret
 
-program_end:
-    # 程序终止点
-    j       program_end
+
+    j      terminate 
+
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
