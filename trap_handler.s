@@ -130,109 +130,202 @@ __mstart:
 
 
 
-### 陷阱处理程序
+### 改进的陷阱处理程序
 __mtrap:
-    # 使用原子指令交换栈指针
+    # 使用原子交换切换栈指针
     csrrw   sp, mscratch, sp
     
-    # 按ABI名称保存寄存器，而非数字命名
+    # 保存所有寄存器
     addi    sp, sp, -124
-    sw      ra,   0(sp)   # x1
-    sw      sp,   4(sp)   # x2 (原始sp)
-    sw      gp,   8(sp)   # x3
-    sw      tp,  12(sp)   # x4
-    sw      t0,  16(sp)   # x5
-    sw      t1,  20(sp)   # x6
-    sw      t2,  24(sp)   # x7
-    sw      s0,  28(sp)   # x8/fp
-    sw      s1,  32(sp)   # x9
-    sw      a0,  36(sp)   # x10
-    sw      a1,  40(sp)   # x11
-    sw      a2,  44(sp)   # x12
-    sw      a3,  48(sp)   # x13
-    sw      a4,  52(sp)   # x14
-    sw      a5,  56(sp)   # x15
-    sw      a6,  60(sp)   # x16
-    sw      a7,  64(sp)   # x17
-    sw      s2,  68(sp)   # x18
-    sw      s3,  72(sp)   # x19
-    sw      s4,  76(sp)   # x20
-    sw      s5,  80(sp)   # x21
-    sw      s6,  84(sp)   # x22
-    sw      s7,  88(sp)   # x23
-    sw      s8,  92(sp)   # x24
-    sw      s9,  96(sp)   # x25
-    sw      s10, 100(sp)  # x26
-    sw      s11, 104(sp)  # x27
-    sw      t3,  108(sp)  # x28
-    sw      t4,  112(sp)  # x29
-    sw      t5,  116(sp)  # x30
-    sw      t6,  120(sp)  # x31
+    sw      ra,   0(sp)
+    sw      sp,   4(sp)
+    sw      gp,   8(sp)
+    sw      tp,  12(sp)
+    sw      t0,  16(sp)
+    sw      t1,  20(sp)
+    sw      t2,  24(sp)
+    sw      s0,  28(sp)
+    sw      s1,  32(sp)
+    sw      a0,  36(sp)
+    sw      a1,  40(sp)
+    sw      a2,  44(sp)
+    sw      a3,  48(sp)
+    sw      a4,  52(sp)
+    sw      a5,  56(sp)
+    sw      a6,  60(sp)
+    sw      a7,  64(sp)
+    sw      s2,  68(sp)
+    sw      s3,  72(sp)
+    sw      s4,  76(sp)
+    sw      s5,  80(sp)
+    sw      s6,  84(sp)
+    sw      s7,  88(sp)
+    sw      s8,  92(sp)
+    sw      s9,  96(sp)
+    sw      s10, 100(sp)
+    sw      s11, 104(sp)
+    sw      t3,  108(sp)
+    sw      t4,  112(sp)
+    sw      t5,  116(sp)
+    sw      t6,  120(sp)
+    
+    # 检查mcause
+    csrr    t0, mcause
+    srli    t1, t0, 31         # 提取中断标志位
+    bnez    t1, _trap_fail     # 如果是中断，跳转到_trap_fail
+    
+    # 判断异常类型
+    li      t1, 4              # 未对齐加载的异常代码
+    beq     t0, t1, handle_load_misalign
+    li      t1, 6              # 未对齐存储的异常代码
+    beq     t0, t1, handle_store_misalign
+    j       _trap_fail         # 其他异常，交给_trap_fail处理
 
-    # 检查是否为中断（mcause最高位）
-    csrr    a0, mcause
-    srli    a1, a0, 31         # 提取最高位到a1
-    bnez    a1, _trap_fail     # 如果是中断，不处理
-
-    # 检查具体的异常类型
-    li      a1, 4              # 未对齐加载代码
-    beq     a0, a1, handle_misaligned_load
-    li      a1, 6              # 未对齐存储代码
-    beq     a0, a1, handle_misaligned_store
-    j       _trap_fail         # 其他类型直接失败
-
-handle_misaligned_load:
-    # 检查引起异常的指令
-    csrr    a0, mepc
-    lw      a1, 0(a0)
+handle_load_misalign:
+    # 获取引发异常的指令
+    csrr    t0, mepc
+    lw      t1, 0(t0)
     
-    # 验证是否为加载指令
-    andi    a2, a1, 0x7F       # 提取opcode
-    li      a3, 0x03           # 加载指令的opcode
-    bne     a2, a3, _trap_fail # 若不是加载指令，失败
+    # 提取opcode并验证是否为load指令
+    andi    t2, t1, 0x7F
+    li      t3, 0x03           # LOAD指令的opcode
+    bne     t2, t3, _trap_fail
     
-    # 获取目标寄存器和未对齐地址
-    srli    a4, a1, 7
-    andi    a4, a4, 0x1F       # 目标寄存器编号
-    csrr    a5, mtval          # 未对齐地址
+    # 分析指令，确定目标寄存器(rd)
+    srli    t2, t1, 7          # 提取rd字段
+    andi    t2, t2, 0x1F       # 掩码为5位
     
-    # 使用对齐访问和位运算合成读取结果
-    andi    t0, a5, -4         # 对齐地址（低两位置0，使用-4即0xFFFFFFFC）
-    lw      t1, 0(t0)          # 读取第一个对齐字
-    lw      t2, 4(t0)          # 读取第二个对齐字
+    # 获取未对齐的地址
+    csrr    t3, mtval
     
-    # 计算位移并组合结果
-    andi    t3, a5, 0x3        # 获取字节偏移
-    slli    t3, t3, 3          # 转换为位偏移
-    li      t4, 32
-    sub     t4, t4, t3         # 计算补充位移
+    # 读取未对齐的数据 - 使用字节级别加载而非位操作
+    lbu     a0, 0(t3)          # 读取字节0
+    lbu     a1, 1(t3)          # 读取字节1
+    lbu     a2, 2(t3)          # 读取字节2
+    lbu     a3, 3(t3)          # 读取字节3
     
-    # 使用位运算组合结果
-    srl     t1, t1, t3         # 第一个字右移
-    sll     t2, t2, t4         # 第二个字左移
-    or      t0, t1, t2         # 合并为完整数据
+    # 组合字节为32位值 - 使用移位和乘法的混合方式
+    li      a4, 0
+    add     a4, a4, a0
+    li      a5, 256
+    mul     a1, a1, a5
+    add     a4, a4, a1
+    li      a5, 65536          # 256²
+    mul     a2, a2, a5
+    add     a4, a4, a2
+    li      a5, 16777216       # 256³
+    mul     a3, a3, a5
+    add     a4, a4, a3
     
-    # 跳过零寄存器
-    beqz    a4, advance_pc
+    # 跳过更新x0寄存器
+    beqz    t2, skip
     
-    # 计算寄存器存储位置并更新
-    slli    t1, a4, 2          # 寄存器编号 × 4
-    add     t1, sp, t1         # 计算地址
-    addi    t1, t1, -4         # 调整偏移
-    sw      t0, 0(t1)          # 保存结果
+    # 更新目标寄存器
+    addi    t4, t2, -1
+    slli    t4, t4, 2
+    add     t4, sp, t4
+    sw      a4, 0(t4)
     
     # 特殊处理栈指针
-    li      t2, 2              # 栈指针编号
-    bne     a4, t2, advance_pc
-    lw      t3, 4(sp)          # 加载更新后的sp
-    csrw    mscratch, t3       # 更新mscratch
-
-advance_pc:
-    # 增加PC到下一条指令
+    li      t5, 2
+    bne     t2, t5, skip
+    lw      t5, 4(sp)
+    csrw    mscratch, t5
+    
+skip:
+    # 更新指令计数器到下一条指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
     
+    # 恢复寄存器并返回
+    lw      ra,   0(sp)
+    lw      gp,   8(sp)
+    lw      tp,  12(sp)
+    lw      t0,  16(sp)
+    lw      t1,  20(sp)
+    lw      t2,  24(sp)
+    lw      s0,  28(sp)
+    lw      s1,  32(sp)
+    lw      a0,  36(sp)
+    lw      a1,  40(sp)
+    lw      a2,  44(sp)
+    lw      a3,  48(sp)
+    lw      a4,  52(sp)
+    lw      a5,  56(sp)
+    lw      a6,  60(sp)
+    lw      a7,  64(sp)
+    lw      s2,  68(sp)
+    lw      s3,  72(sp)
+    lw      s4,  76(sp)
+    lw      s5,  80(sp)
+    lw      s6,  84(sp)
+    lw      s7,  88(sp)
+    lw      s8,  92(sp)
+    lw      s9,  96(sp)
+    lw      s10, 100(sp)
+    lw      s11, 104(sp)
+    lw      t3,  108(sp)
+    lw      t4,  112(sp)
+    lw      t5,  116(sp)
+    lw      t6,  120(sp)
+    addi    sp, sp, 124
+    
+    csrrw   sp, mscratch, sp
+    mret
+
+handle_store_misalign:
+    # 获取引发异常的指令
+    csrr    t0, mepc
+    lw      t1, 0(t0)
+    
+    # 验证是否为存储指令
+    andi    t2, t1, 0x7F
+    li      t3, 0x23           # STORE指令的opcode
+    bne     t2, t3, _trap_fail
+    
+    # 简单地跳过该指令
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+    
+    # 恢复寄存器并返回
+    lw      ra,   0(sp)
+    lw      gp,   8(sp)
+    lw      tp,  12(sp)
+    lw      t0,  16(sp)
+    lw      t1,  20(sp)
+    lw      t2,  24(sp)
+    lw      s0,  28(sp)
+    lw      s1,  32(sp)
+    lw      a0,  36(sp)
+    lw      a1,  40(sp)
+    lw      a2,  44(sp)
+    lw      a3,  48(sp)
+    lw      a4,  52(sp)
+    lw      a5,  56(sp)
+    lw      a6,  60(sp)
+    lw      a7,  64(sp)
+    lw      s2,  68(sp)
+    lw      s3,  72(sp)
+    lw      s4,  76(sp)
+    lw      s5,  80(sp)
+    lw      s6,  84(sp)
+    lw      s7,  88(sp)
+    lw      s8,  92(sp)
+    lw      s9,  96(sp)
+    lw      s10, 100(sp)
+    lw      s11, 104(sp)
+    lw      t3,  108(sp)
+    lw      t4,  112(sp)
+    lw      t5,  116(sp)
+    lw      t6,  120(sp)
+    addi    sp, sp, 124
+    
+    csrrw   sp, mscratch, sp
+    mret
+
+_trap_fail:
     # 恢复所有寄存器
     lw      ra,   0(sp)
     lw      gp,   8(sp)
@@ -264,74 +357,11 @@ advance_pc:
     lw      t4,  112(sp)
     lw      t5,  116(sp)
     lw      t6,  120(sp)
-    
-    addi    sp, sp, 124
-    csrrw   sp, mscratch, sp
-    mret
-
-handle_misaligned_store:
-    # 处理存储指令异常
-    csrr    a0, mepc
-    lw      a1, 0(a0)
-    
-    # 验证是否为存储指令
-    andi    a2, a1, 0x7F
-    li      a3, 0x23           # 存储指令的opcode
-    bne     a2, a3, _trap_fail
-    
-    # 对于存储指令，只需跳过它
-    addi    a0, a0, 4
-    csrw    mepc, a0
-    
-    # 直接复用恢复寄存器的代码
-    j       advance_pc
-
-_trap_fail:
-    # 恢复控制寄存器
-    lw      ra,   0(sp)
-    lw      gp,   8(sp)
-    lw      tp,  12(sp)
-    
-    # 恢复临时寄存器
-    lw      t0,  16(sp)
-    lw      t1,  20(sp)
-    lw      t2,  24(sp)
-    lw      t3,  108(sp)
-    lw      t4,  112(sp)
-    lw      t5,  116(sp)
-    lw      t6,  120(sp)
-    
-    # 恢复保存寄存器
-    lw      s0,  28(sp)
-    lw      s1,  32(sp)
-    lw      s2,  68(sp)
-    lw      s3,  72(sp)
-    lw      s4,  76(sp)
-    lw      s5,  80(sp)
-    lw      s6,  84(sp)
-    lw      s7,  88(sp)
-    lw      s8,  92(sp)
-    lw      s9,  96(sp)
-    lw      s10, 100(sp)
-    lw      s11, 104(sp)
-    
-    # 恢复参数寄存器
-    lw      a0,  36(sp)
-    lw      a1,  40(sp)
-    lw      a2,  44(sp)
-    lw      a3,  48(sp)
-    lw      a4,  52(sp)
-    lw      a5,  56(sp)
-    lw      a6,  60(sp)
-    lw      a7,  64(sp)
-    
-    # 恢复栈指针
     addi    sp, sp, 124
     
-    # 跳转到终止程序
     j       terminate
 
-    
+
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
