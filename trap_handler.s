@@ -238,50 +238,6 @@ skip:
     j       restore_registers
 
 
-# 5) Handle misaligned store (sw)
-handle_misaligned_store:
-    csrr    t0, mepc
-    lw      t1, 0(t0)   # Read the faulting instruction
-    
-    # Verify instruction is sw (check opcode and funct3)
-    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
-    li      t3, 0x23           # Store opcode = 0x23
-    bne     t2, t3, terminate  # Not a store instruction
-    
-    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
-    andi    t2, t2, 0x7        # Mask for 3 bits
-    li      t3, 2              # sw funct3 = 2
-    bne     t2, t3, terminate  # Not a sw instruction
-    
-    # Extract source register (rs2) from instruction (bits 20-24)
-    srli    t2, t1, 20
-    andi    t2, t2, 0x1F       # Mask for 5 bits
-    
-    # Get misaligned address from mtval
-    csrr    t3, mtval  
-
-    # Get value to store from register's saved location
-    slli    t4, t2, 2       # Multiply reg number by 4 to get offset
-    add     t4, sp, t4      # Address of register's saved value
-    lw      t5, 0(t4)       # Load the value to store
-
-    # Perform unaligned store byte by byte
-    sb      t5, 0(t3)       # Store 1st byte
-    srli    t5, t5, 8
-    sb      t5, 1(t3)       # Store 2nd byte
-    srli    t5, t5, 8
-    sb      t5, 2(t3)       # Store 3rd byte
-    srli    t5, t5, 8
-    sb      t5, 3(t3)       # Store 4th byte
-
-    # Update mepc to point to the next instruction
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    j       restore_registers
-
-
 # 6) Restore registers and return
 restore_registers:
     lw      x1, 4(sp)
