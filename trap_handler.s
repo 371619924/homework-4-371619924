@@ -232,6 +232,13 @@ __mtrap:
     # Store the loaded value to the destination register's saved location
     sw t5, 0(t6)
     
+    # Special handling for stack pointer (x2)
+    li t0, 2
+    bne t3, t0, skip   # t3 contains the destination register number
+    lw t0, 8(sp)                       # Load original sp value saved at offset 8
+    csrw mscratch, t0                  # Update mscratch with the correct sp value
+skip:
+    
     # Increment mepc to skip the faulting instruction
     csrr t0, mepc
     addi t0, t0, 4
@@ -281,6 +288,8 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
+
+
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
