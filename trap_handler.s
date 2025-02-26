@@ -130,16 +130,15 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 
-
 __mtrap:
-    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # 1) 交换栈指针，让内核使用自己的栈
     csrrw   sp, mscratch, sp
 
-    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # 2) 保存所有 32 个寄存器到内核栈 (128 字节 = 32 * 4)
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x2, 8(sp)     # 保存原用户栈指针 x2
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -170,73 +169,80 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # 3) Check if mcause highest bit is 1 (interrupt)
+    # 3) 判断是否中断 (mcause 最高位是否为 1)
     csrr    t0, mcause
-    li      t1, 0x80000000  # Mask for the interrupt bit (bit 31)
-    and     t2, t0, t1      # Extract the interrupt bit
-    bne     t2, zero, terminate  # If interrupt bit is set, terminate
+    li      t1, 0x80000000        # 最高位掩码
+    and     t2, t0, t1
+    bne     t2, zero, terminate   # 若最高位不为 0，则是中断，直接终止
 
-    # 4) Check trap cause (mcause)
-    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
-    and     t0, t0, t1      # Clear the interrupt bit
+    # 4) 取出异常码（清除最高位）
+    li      t1, 0x7FFFFFFF
+    and     t0, t0, t1
     li      t1, 4    # 4 = misaligned load
-    bne     t0, t1, terminate  # If not misaligned load, terminate
+    bne     t0, t1, terminate     # 如果不是 4，终止
 
-    # 5) Handle misaligned load (lw)
+    # 5) 检查指令是否真的为 lw
     csrr    t0, mepc
-    lw      t1, 0(t0)   # Read the faulting instruction
-    
-    # Verify instruction is lw (check opcode and funct3)
-    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
-    li      t3, 0x03           # Load opcode = 0x03
-    bne     t2, t3, terminate  # Not a load instruction
-    
-    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
-    andi    t2, t2, 0x7        # Mask for 3 bits
-    li      t3, 2              # lw funct3 = 2
-    bne     t2, t3, terminate  # Not a lw instruction
-    
-    # Extract destination register (rd) from instruction (bits 7-11)
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F       # Mask for 5 bits
-    
-    # Get misaligned address from mtval
-    csrr    t3, mtval  
+    lw      t1, 0(t0)             # 取出故障指令
 
-    # Perform unaligned load byte by byte
-    lbu     t4, 0(t3)          # Load 1st byte
-    lbu     t5, 1(t3)          # Load 2nd byte
+    # opcode == 0x03 ?
+    andi    t2, t1, 0x7F
+    li      t3, 0x03
+    bne     t2, t3, terminate
+
+    # funct3 == 2 (lw) ?
+    srli    t2, t1, 12            # 取 bits[14:12]
+    andi    t2, t2, 0x7
+    li      t3, 2
+    bne     t2, t3, terminate
+
+    # 6) (关键修改) 比较 mepc 和 mtval 高 30 位
+    #    若相同，则说明这是在加载“与指令同址”的地方（通常是跳转失败），无法修复 → 终止
+    csrr    t2, mepc
+    csrr    t3, mtval
+    srli    t4, t2, 2             # 忽略低 2 位
+    srli    t5, t3, 2
+    beq     t4, t5, terminate
+
+    # 7) 执行未对齐的 lw：逐字节读取，合成为 32 位
+    csrr    t3, mtval
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lbu     t5, 2(t3)          # Load 3rd byte
+    lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lbu     t5, 3(t3)          # Load 4th byte
+    lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
-    add     t2, sp, t2         # Address of register's saved value
-    sw      t4, 0(t2)          # Store value
+    # 提取 rd（目的寄存器）
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F
 
-    # Special handling for SP (x2) as destination
-    srli    t0, t1, 7          # Extract rd again
-    andi    t0, t0, 0x1F       # Mask for 5 bits
-    li      t6, 2              # x2 = sp
+    # 写回到内核栈上保存的寄存器槽中
+    slli    t2, t2, 2
+    add     t2, sp, t2
+    sw      t4, 0(t2)
+
+    # 若目标寄存器是 sp (x2)，则还需更新 mscratch 中保存的内核栈指针
+    srli    t0, t1, 7
+    andi    t0, t0, 0x1F
+    li      t6, 2
     bne     t0, t6, skip_sp_update
-    lw      t0, 8(sp)          # Load original sp value
-    csrw    mscratch, t0       # Update mscratch
+    lw      t0, 8(sp)           # 原 sp
+    csrw    mscratch, t0
 skip_sp_update:
 
-    # Update mepc to point to the next instruction
+    # 8) mepc 指向下一条指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    # Restore registers and return
+    # 恢复寄存器并返回用户态
     lw      x1, 4(sp)
     lw      x3, 12(sp)
     lw      x4, 16(sp)
@@ -271,6 +277,9 @@ skip_sp_update:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
+
+
+
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
