@@ -131,134 +131,192 @@ __mstart:
 ### Trap handler
 
 
-    .equ FRAME_SIZE, 112         # Total bytes for 28 registers (ra, t0-t6, s0-s11, a0-a7)
+    __mtrap:
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    csrrw   sp, mscratch, sp
 
-__mtrap:
-    # Save all registers
-    addi   sp, sp, -FRAME_SIZE
-    sw     ra,   0(sp)
-    sw     t0,   4(sp)
-    sw     t1,   8(sp)
-    sw     t2,  12(sp)
-    sw     t3,  16(sp)
-    sw     t4,  20(sp)
-    sw     t5,  24(sp)
-    sw     t6,  28(sp)
-    sw     s0,  32(sp)
-    sw     s1,  36(sp)
-    sw     s2,  40(sp)
-    sw     s3,  44(sp)
-    sw     s4,  48(sp)
-    sw     s5,  52(sp)
-    sw     s6,  56(sp)
-    sw     s7,  60(sp)
-    sw     s8,  64(sp)
-    sw     s9,  68(sp)
-    sw     s10, 72(sp)
-    sw     s11, 76(sp)
-    sw     a0,  80(sp)
-    sw     a1,  84(sp)
-    sw     a2,  88(sp)
-    sw     a3,  92(sp)
-    sw     a4,  96(sp)
-    sw     a5, 100(sp)
-    sw     a6, 104(sp)
-    sw     a7, 108(sp)
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    addi    sp, sp, -128
+    sw      x0, 0(sp)
+    sw      x1, 4(sp)
+    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x3, 12(sp)
+    sw      x4, 16(sp)
+    sw      x5, 20(sp)
+    sw      x6, 24(sp)
+    sw      x7, 28(sp)
+    sw      x8, 32(sp)
+    sw      x9, 36(sp)
+    sw      x10, 40(sp)
+    sw      x11, 44(sp)
+    sw      x12, 48(sp)
+    sw      x13, 52(sp)
+    sw      x14, 56(sp)
+    sw      x15, 60(sp)
+    sw      x16, 64(sp)
+    sw      x17, 68(sp)
+    sw      x18, 72(sp)
+    sw      x19, 76(sp)
+    sw      x20, 80(sp)
+    sw      x21, 84(sp)
+    sw      x22, 88(sp)
+    sw      x23, 92(sp)
+    sw      x24, 96(sp)
+    sw      x25, 100(sp)
+    sw      x26, 104(sp)
+    sw      x27, 108(sp)
+    sw      x28, 112(sp)
+    sw      x29, 116(sp)
+    sw      x30, 120(sp)
+    sw      x31, 124(sp)
 
-    # Examine the cause of the trap.
-    csrr   t0, mcause
-    li     t1, 4             # Use the literal 4 for misaligned load word exception
-    beq    t0, t1, handle_misaligned_load
+# 3) Check trap cause (mcause)
+    csrr    t0, mcause
+    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
+    and     t0, t0, t1      # Clear the interrupt bit
+    li      t1, 4    # 4 = misaligned load
+    beq     t0, t1, handle_misaligned_load
+    li      t1, 6    # 6 = misaligned store
+    beq     t0, t1, handle_misaligned_store
+    j       terminate  
 
-    # Not a misaligned load word – jump to the default terminate routine.
-    j terminate
-
+# 4) Handle misaligned load (lw)
 handle_misaligned_load:
-    # Read the faulting address from mtval.
-    csrr   t1, mtval
-    # Compute offset = fault_addr mod 4 (i.e. the lower 2 bits)
-    andi   t2, t1, 3
-    # Compute the aligned address: t3 = fault_addr - offset
-    add    t3, t1, zero
-    sub    t3, t3, t2
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # Read the faulting instruction
+    
+    # Verify instruction is lw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
+    bne     t2, t3, terminate  # Not a load instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
+    
+    # Extract destination register (rd) from instruction (bits 7-11)
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
 
-    # Load the two adjacent aligned words.
-    lw     t4, 0(t3)     # lower aligned word
-    lw     t5, 4(t3)     # upper aligned word
+    # Perform unaligned load byte by byte
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
+    slli    t5, t5, 8
+    or      t4, t4, t5
 
-    # Patch the misaligned load result based on offset.
-    beq    t2, zero, misaligned_case0
-    li     t7, 1
-    beq    t2, t7, misaligned_case1
-    li     t7, 2
-    beq    t2, t7, misaligned_case2
-    li     t7, 3
-    beq    t2, t7, misaligned_case3
+    lbu     t5, 2(t3)          # Load 3rd byte
+    slli    t5, t5, 16
+    or      t4, t4, t5
 
-misaligned_case0:
-    mv     t6, t4
-    j      misaligned_finish
+    lbu     t5, 3(t3)          # Load 4th byte
+    slli    t5, t5, 24
+    or      t4, t4, t5
 
-misaligned_case1:
-    # For offset = 1: result = (t4 >> 8) | (t5 << 24)
-    srl    t6, t4, 8
-    sll    t7, t5, 24
-    or     t6, t6, t7
-    j      misaligned_finish
+    # Store the loaded value to the destination register's location on stack
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
 
-misaligned_case2:
-    # For offset = 2: result = (t4 >> 16) | (t5 << 16)
-    srl    t6, t4, 16
-    sll    t7, t5, 16
-    or     t6, t6, t7
-    j      misaligned_finish
+    # Special handling for SP (x2) as destination
+    srli    t0, t1, 7          # Extract rd again
+    andi    t0, t0, 0x1F       # Mask for 5 bits
+    li      t6, 2              # x2 = sp
+    bne     t0, t6, skip
+    lw      t0, 8(sp)          # Load original sp value
+    csrw    mscratch, t0       # Update mscratch
+skip:
 
-misaligned_case3:
-    # For offset = 3: result = (t4 >> 24) | (t5 << 8)
-    srl    t6, t4, 24
-    sll    t7, t5, 8
-    or     t6, t6, t7
+    # Update mepc to point to the next instruction
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
 
-misaligned_finish:
-    # Write the patched result back into the saved a0 slot (offset 80 from sp).
-    sw     t6, 80(sp)
+    j       restore_registers
 
-    # Increment mepc to resume execution at the next instruction.
-    csrr   t0, mepc
-    addi   t0, t0, 4
-    csrw   mepc, t0
 
-    # Restore all registers
-    lw     ra,   0(sp)
-    lw     t0,   4(sp)
-    lw     t1,   8(sp)
-    lw     t2,  12(sp)
-    lw     t3,  16(sp)
-    lw     t4,  20(sp)
-    lw     t5,  24(sp)
-    lw     t6,  28(sp)
-    lw     s0,  32(sp)
-    lw     s1,  36(sp)
-    lw     s2,  40(sp)
-    lw     s3,  44(sp)
-    lw     s4,  48(sp)
-    lw     s5,  52(sp)
-    lw     s6,  56(sp)
-    lw     s7,  60(sp)
-    lw     s8,  64(sp)
-    lw     s9,  68(sp)
-    lw     s10, 72(sp)
-    lw     s11, 76(sp)
-    lw     a0,  80(sp)
-    lw     a1,  84(sp)
-    lw     a2,  88(sp)
-    lw     a3,  92(sp)
-    lw     a4,  96(sp)
-    lw     a5, 100(sp)
-    lw     a6, 104(sp)
-    lw     a7, 108(sp)
-    addi   sp, sp, FRAME_SIZE
+# 5) Handle misaligned store (sw)
+handle_misaligned_store:
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # Read the faulting instruction
+    
+    # Verify instruction is sw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x23           # Store opcode = 0x23
+    bne     t2, t3, terminate  # Not a store instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # sw funct3 = 2
+    bne     t2, t3, terminate  # Not a sw instruction
+    
+    # Extract source register (rs2) from instruction (bits 20-24)
+    srli    t2, t1, 20
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
 
+    # Get value to store from register's saved location
+    slli    t4, t2, 2       # Multiply reg number by 4 to get offset
+    add     t4, sp, t4      # Address of register's saved value
+    lw      t5, 0(t4)       # Load the value to store
+
+    # Perform unaligned store byte by byte
+    sb      t5, 0(t3)       # Store 1st byte
+    srli    t5, t5, 8
+    sb      t5, 1(t3)       # Store 2nd byte
+    srli    t5, t5, 8
+    sb      t5, 2(t3)       # Store 3rd byte
+    srli    t5, t5, 8
+    sb      t5, 3(t3)       # Store 4th byte
+
+    # Update mepc to point to the next instruction
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+
+    j       restore_registers
+
+
+# 6) Restore registers and return
+restore_registers:
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
+
+    addi    sp, sp, 128
+    csrrw   sp, mscratch, sp
     mret
 
     
