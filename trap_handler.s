@@ -161,7 +161,8 @@ handle_misaligned_instruction:
     csrr    t0, mtval
     
     # Align the address to 4-byte boundary (clear bottom 2 bits)
-    andi    t0, t0, ~0x3
+    li      t6, 0xFFFFFFFC   # This is equivalent to ~0x3
+    and     t0, t0, t6
     
     # Update mepc to the aligned address
     csrw    mepc, t0
@@ -176,7 +177,8 @@ handle_misaligned_load:
     
     # If mepc and mtval are close, it might be an instruction fetch issue
     sub     t2, t1, t0
-    andi    t2, t2, ~0x3  # Clear bottom 2 bits
+    li      t6, 0xFFFFFFFC   # This is equivalent to ~0x3
+    and     t2, t2, t6       # Clear bottom 2 bits
     beqz    t2, handle_misaligned_instruction
     
     # Continue with normal misaligned load handling
