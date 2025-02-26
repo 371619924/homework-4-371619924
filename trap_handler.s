@@ -144,35 +144,60 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
     
-    # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
+    # Check mcause to determine exception type
     csrr t0, mcause
-    li t1, 0x80000000    # Mask for highest bit
+    
+    # Check if it's an interrupt (highest bit set)
+    li t1, 0x80000000
     and t2, t0, t1
-    bnez t2, go_terminate  # If it's an interrupt, go to terminate
+    bnez t2, go_terminate   # If it's an interrupt, go to terminate
     
     # Get the exception code (clear the highest bit)
-    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
-    and t0, t0, t2          # Clear the highest bit to get the exception code
+    li t2, 0x7FFFFFFF
+    and t0, t0, t2
     
-    # Check for misaligned instruction address (cause = 0) or instruction access fault (cause = 1)
-    li t1, 0                # Misaligned instruction address exception code
-    beq t0, t1, handle_instruction_fault
+    # Check for misaligned instruction address (cause = 0)
+    li t1, 0
+    beq t0, t1, handle_instruction_misalign
     
-    li t1, 1                # Instruction access fault exception code
-    beq t0, t1, handle_instruction_fault
-    
-    # Check for load access fault (cause = 5)
-    li t1, 5                # Load access fault exception code
+    # Check for instruction access fault (cause = 1)
+    li t1, 1
     beq t0, t1, handle_instruction_fault
     
     # Check if the exception is a misaligned load address (cause = 4)
-    li t1, 4                # Misaligned load address exception code
-    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    li t1, 4
+    beq t0, t1, handle_misaligned_load
     
-    # Handle misaligned load word
+    # For any other exception, just terminate
+    j go_terminate
+
+handle_instruction_misalign:
+handle_instruction_fault:
+    # For instruction faults, get the next aligned address after mtval
+    csrr t0, mtval
+    addi t0, t0, 3          # Add 3 to round up to next multiple of 4
+    li t1, ~3               # Create mask to clear lower 2 bits (0xFFFFFFFC)
+    and t0, t0, t1          # t0 now contains next aligned address
+    
+    # Set mepc to this aligned address
+    csrw mepc, t0
+    
+    # Restore registers and return
+    j restore_regs_and_return
+    
+handle_misaligned_load:
+    # Get the misaligned address from mtval
+    csrr t4, mtval
+    
     # Get the instruction that caused the exception
-    csrr t0, mepc           # t0 = address of the instruction
-    lw t1, 0(t0)            # t1 = instruction
+    csrr t0, mepc
+    
+    # Safely check if we can read from mepc
+    # Compare mtval with mepc to see if we're trying to execute from a misaligned address
+    beq t0, t4, handle_instruction_misalign
+    
+    # Now we know it's safe to read the instruction
+    lw t1, 0(t0)
     
     # Check if the instruction is a load word (lw)
     # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
@@ -193,9 +218,6 @@ __mtrap:
     li t2, 0xF80            # Mask for rd (bits 7-11)
     and t3, t1, t2          # Extract rd bits
     srli t3, t3, 7          # Shift right to get the register number
-    
-    # Get the misaligned address from mtval
-    csrr t4, mtval          # t4 = misaligned address
     
     # Load the bytes individually and combine them
     lbu t5, 0(t4)           # Load first byte (least significant)
@@ -224,22 +246,11 @@ __mtrap:
     addi t0, t0, 4
     csrw mepc, t0
     
-    # Restore all registers and return
-    j restore_regs_and_return
-
-handle_instruction_fault:
-    # For instruction faults, skip the offending instruction
-    # by incrementing mepc by 4 (size of an instruction)
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
-    
     # Fall through to restore_regs_and_return
 
 restore_regs_and_return:
-    # Restore all registers from the stack (except x0 which is hardwired to 0, and x2 which is sp)
+    # Restore all registers from the stack
     lw x1, 4(sp)
-    # Skip restoring x2 (sp) as we'll restore it via csrrw later
     lw x3, 12(sp)
     lw x4, 16(sp)
     lw x5, 20(sp)
@@ -282,6 +293,8 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
+
+    
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
