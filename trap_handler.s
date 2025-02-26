@@ -131,155 +131,155 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-    # 1) 交换栈指针，让内核使用自己的栈
-    csrrw   sp, mscratch, sp
-
-    # 2) 保存所有 32 个寄存器到内核栈 (128 字节 = 32 * 4)
-    addi    sp, sp, -128
-    sw      x0, 0(sp)
-    sw      x1, 4(sp)
-    sw      x2, 8(sp)     # 保存原用户栈指针 x2
-    sw      x3, 12(sp)
-    sw      x4, 16(sp)
-    sw      x5, 20(sp)
-    sw      x6, 24(sp)
-    sw      x7, 28(sp)
-    sw      x8, 32(sp)
-    sw      x9, 36(sp)
-    sw      x10, 40(sp)
-    sw      x11, 44(sp)
-    sw      x12, 48(sp)
-    sw      x13, 52(sp)
-    sw      x14, 56(sp)
-    sw      x15, 60(sp)
-    sw      x16, 64(sp)
-    sw      x17, 68(sp)
-    sw      x18, 72(sp)
-    sw      x19, 76(sp)
-    sw      x20, 80(sp)
-    sw      x21, 84(sp)
-    sw      x22, 88(sp)
-    sw      x23, 92(sp)
-    sw      x24, 96(sp)
-    sw      x25, 100(sp)
-    sw      x26, 104(sp)
-    sw      x27, 108(sp)
-    sw      x28, 112(sp)
-    sw      x29, 116(sp)
-    sw      x30, 120(sp)
-    sw      x31, 124(sp)
-
-    # 3) 判断是否中断 (mcause 最高位是否为 1)
-    csrr    t0, mcause
-    li      t1, 0x80000000        # 最高位掩码
-    and     t2, t0, t1
-    bne     t2, zero, terminate   # 若最高位不为 0，则是中断，直接终止
-
-    # 4) 取出异常码（清除最高位）
-    li      t1, 0x7FFFFFFF
-    and     t0, t0, t1
-    li      t1, 4    # 4 = misaligned load
-    bne     t0, t1, terminate     # 如果不是 4，终止
-
-    # 5) 检查指令是否真的为 lw
-    csrr    t0, mepc
-    lw      t1, 0(t0)             # 取出故障指令
-
-    # opcode == 0x03 ?
-    andi    t2, t1, 0x7F
-    li      t3, 0x03
-    bne     t2, t3, terminate
-
-    # funct3 == 2 (lw) ?
-    srli    t2, t1, 12            # 取 bits[14:12]
-    andi    t2, t2, 0x7
-    li      t3, 2
-    bne     t2, t3, terminate
-
-    # 6) (关键修改) 比较 mepc 和 mtval 高 30 位
-    #    若相同，则说明这是在加载“与指令同址”的地方（通常是跳转失败），无法修复 → 终止
-    csrr    t2, mepc
-    csrr    t3, mtval
-    srli    t4, t2, 2             # 忽略低 2 位
-    srli    t5, t3, 2
-    beq     t4, t5, terminate
-
-    # 7) 执行未对齐的 lw：逐字节读取，合成为 32 位
-    csrr    t3, mtval
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
-    slli    t5, t5, 8
-    or      t4, t4, t5
-
-    lbu     t5, 2(t3)
-    slli    t5, t5, 16
-    or      t4, t4, t5
-
-    lbu     t5, 3(t3)
-    slli    t5, t5, 24
-    or      t4, t4, t5
-
-    # 提取 rd（目的寄存器）
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F
-
-    # 写回到内核栈上保存的寄存器槽中
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    sw      t4, 0(t2)
-
-    # 若目标寄存器是 sp (x2)，则还需更新 mscratch 中保存的内核栈指针
-    srli    t0, t1, 7
-    andi    t0, t0, 0x1F
-    li      t6, 2
-    bne     t0, t6, skip_sp_update
-    lw      t0, 8(sp)           # 原 sp
-    csrw    mscratch, t0
-skip_sp_update:
-
-    # 8) mepc 指向下一条指令
-    csrr    t0, mepc
-    addi    t0, t0, 4
-    csrw    mepc, t0
-
-    # 恢复寄存器并返回用户态
-    lw      x1, 4(sp)
-    lw      x3, 12(sp)
-    lw      x4, 16(sp)
-    lw      x5, 20(sp)
-    lw      x6, 24(sp)
-    lw      x7, 28(sp)
-    lw      x8, 32(sp)
-    lw      x9, 36(sp)
-    lw      x10, 40(sp)
-    lw      x11, 44(sp)
-    lw      x12, 48(sp)
-    lw      x13, 52(sp)
-    lw      x14, 56(sp)
-    lw      x15, 60(sp)
-    lw      x16, 64(sp)
-    lw      x17, 68(sp)
-    lw      x18, 72(sp)
-    lw      x19, 76(sp)
-    lw      x20, 80(sp)
-    lw      x21, 84(sp)
-    lw      x22, 88(sp)
-    lw      x23, 92(sp)
-    lw      x24, 96(sp)
-    lw      x25, 100(sp)
-    lw      x26, 104(sp)
-    lw      x27, 108(sp)
-    lw      x28, 112(sp)
-    lw      x29, 116(sp)
-    lw      x30, 120(sp)
-    lw      x31, 124(sp)
-
-    addi    sp, sp, 128
-    csrrw   sp, mscratch, sp
+    # Swap sp and mscratch to get a kernel stack
+    csrrw sp, mscratch, sp
+    
+    # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
+    addi sp, sp, -128
+    
+    # Save all registers to the stack
+    sw x0, 0(sp)
+    sw x1, 4(sp)
+    sw x2, 8(sp)  # Save the original user stack pointer
+    sw x3, 12(sp)
+    sw x4, 16(sp)
+    sw x5, 20(sp)
+    sw x6, 24(sp)
+    sw x7, 28(sp)
+    sw x8, 32(sp)
+    sw x9, 36(sp)
+    sw x10, 40(sp)
+    sw x11, 44(sp)
+    sw x12, 48(sp)
+    sw x13, 52(sp)
+    sw x14, 56(sp)
+    sw x15, 60(sp)
+    sw x16, 64(sp)
+    sw x17, 68(sp)
+    sw x18, 72(sp)
+    sw x19, 76(sp)
+    sw x20, 80(sp)
+    sw x21, 84(sp)
+    sw x22, 88(sp)
+    sw x23, 92(sp)
+    sw x24, 96(sp)
+    sw x25, 100(sp)
+    sw x26, 104(sp)
+    sw x27, 108(sp)
+    sw x28, 112(sp)
+    sw x29, 116(sp)
+    sw x30, 120(sp)
+    sw x31, 124(sp)
+    
+    # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
+    csrr t0, mcause
+    li t1, 0x80000000    # Mask for highest bit
+    and t2, t0, t1
+    bnez t2, go_terminate  # If it's an interrupt, go to terminate
+    
+    # Check if the exception is a misaligned load address (cause = 4)
+    andi t0, t0, 0x7FFFFFFF  # Clear the highest bit to get the exception code
+    li t1, 4                # Misaligned load address exception code
+    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    
+    # Get the instruction that caused the exception
+    csrr t0, mepc           # t0 = address of the instruction
+    lw t1, 0(t0)            # t1 = instruction
+    
+    # Check if the instruction is a load word (lw)
+    # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
+    # Opcode for loads is 0000011 (bits 0-6)
+    # Funct3 for lw is 010 (bits 12-14)
+    
+    li t2, 0x7F             # Mask for opcode (bits 0-6)
+    and t3, t1, t2          # Extract opcode
+    li t2, 0x03             # Load opcode (0000011)
+    bne t3, t2, go_terminate  # If not a load instruction, terminate
+    
+    li t2, 0x7000           # Mask for funct3 (bits 12-14)
+    and t3, t1, t2          # Extract funct3
+    li t2, 0x2000           # funct3 for lw (010)
+    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
+    
+    # Extract the destination register (rd) from the instruction (bits 7-11)
+    li t2, 0xF80            # Mask for rd (bits 7-11)
+    and t3, t1, t2          # Extract rd bits
+    srli t3, t3, 7          # Shift right to get the register number
+    
+    # Get the misaligned address from mtval
+    csrr t4, mtval          # t4 = misaligned address
+    
+    # Load the bytes individually and combine them
+    lbu t5, 0(t4)           # Load first byte (least significant)
+    lbu t6, 1(t4)           # Load second byte
+    slli t6, t6, 8          # Shift left by 8 bits
+    or t5, t5, t6           # Combine
+    
+    lbu t6, 2(t4)           # Load third byte
+    slli t6, t6, 16         # Shift left by 16 bits
+    or t5, t5, t6           # Combine
+    
+    lbu t6, 3(t4)           # Load fourth byte (most significant)
+    slli t6, t6, 24         # Shift left by 24 bits
+    or t5, t5, t6           # Combine
+    
+    # Now t5 contains the correctly loaded word
+    # Calculate the address in the stack where the destination register is saved
+    slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
+    add t6, t6, sp          # t6 = address of rd in the stack
+    
+    # Store the loaded value to the destination register's saved location
+    sw t5, 0(t6)
+    
+    # Increment mepc to skip the faulting instruction
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+    
+    # Restore all registers from the stack
+    lw x1, 4(sp)
+    lw x3, 12(sp)
+    lw x4, 16(sp)
+    lw x5, 20(sp)
+    lw x6, 24(sp)
+    lw x7, 28(sp)
+    lw x8, 32(sp)
+    lw x9, 36(sp)
+    lw x10, 40(sp)
+    lw x11, 44(sp)
+    lw x12, 48(sp)
+    lw x13, 52(sp)
+    lw x14, 56(sp)
+    lw x15, 60(sp)
+    lw x16, 64(sp)
+    lw x17, 68(sp)
+    lw x18, 72(sp)
+    lw x19, 76(sp)
+    lw x20, 80(sp)
+    lw x21, 84(sp)
+    lw x22, 88(sp)
+    lw x23, 92(sp)
+    lw x24, 96(sp)
+    lw x25, 100(sp)
+    lw x26, 104(sp)
+    lw x27, 108(sp)
+    lw x28, 112(sp)
+    lw x29, 116(sp)
+    lw x30, 120(sp)
+    lw x31, 124(sp)
+    
+    # Deallocate stack space and swap back to user stack
+    addi sp, sp, 128
+    csrrw sp, mscratch, sp
+    
+    # Return from trap
     mret
 
-
-
+go_terminate:
+    # Restore stack before jumping to terminate
+    addi sp, sp, 128
+    csrrw sp, mscratch, sp
+    j terminate
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
