@@ -151,70 +151,64 @@ __mtrap:
     and t2, t0, t1
     bnez t2, go_terminate
 
-    # 5) 检查是否是取指令未对齐异常 (mcause = 0)
-    li t1, 0x7FFFFFFF   # 只保留 mcause 的低 31 位
-    and t0, t0, t1
-    li t1, 0            # 指令未对齐异常的 mcause 值
-    bne t0, t1, check_load_misaligned
-
-    # 6) 读取 mtval 和 mepc，比较是否相等
+    # 5) 读取 mtval 和 mepc，检查是否是非法跳转
     csrr t2, mtval
     csrr t3, mepc
-    beq t2, t3, go_terminate  # 如果 mtval == mepc，说明是取指令异常，直接终止
 
-check_load_misaligned:
-    # 7) 检查是否是 Misaligned Load (mcause = 4)
+    # 如果 mtval == 0x00000000 或者 mtval == mepc，说明指令跳转到非法地址，终止
+    beqz t2, go_terminate
+    beq t2, t3, go_terminate
+
+    # 6) 检查是否是 Misaligned Load (mcause = 4)
     li t1, 4
     bne t0, t1, go_terminate
 
-    # 8) 读取导致异常的指令
-    csrr t0, mepc
-    lw t1, 0(t0)   # t1 = 触发异常的指令
+    # 7) 读取导致异常的指令
+    lw t1, 0(t3)   # t3 = mepc, 取出异常指令
 
-    # 9) 检查指令是否是 lw
+    # 8) 确保指令是 lw
     li t2, 0x7F    # 提取 opcode (bits 0-6)
-    and t3, t1, t2
+    and t4, t1, t2
     li t2, 0x03    # lw 的 opcode (0000011)
-    bne t3, t2, go_terminate
+    bne t4, t2, go_terminate
 
     li t2, 0x7000  # 提取 funct3 (bits 12-14)
-    and t3, t1, t2
+    and t4, t1, t2
     li t2, 0x2000  # lw 的 funct3 (010)
-    bne t3, t2, go_terminate
+    bne t4, t2, go_terminate
 
-    # 10) 读取目标寄存器 rd
-    li t2, 0xF80   # 提取 rd (bits 7-11)
-    and t3, t1, t2
-    srli t3, t3, 7 # 右移 7 位获得 rd 编号
+    # 9) 提取 rd (bits 7-11)
+    li t2, 0xF80
+    and t4, t1, t2
+    srli t4, t4, 7
 
-    # 11) 读取 misaligned 地址
-    csrr t4, mtval
+    # 10) 读取 misaligned 地址
+    csrr t5, mtval
 
-    # 12) 逐字节读取数据并组合
-    lbu t5, 0(t4)      # 读取最低字节
-    lbu t6, 1(t4)
-    slli t6, t6, 8
-    or t5, t5, t6
+    # 11) 逐字节读取数据
+    lbu t6, 0(t5)
+    lbu t7, 1(t5)
+    slli t7, t7, 8
+    or t6, t6, t7
 
-    lbu t6, 2(t4)
-    slli t6, t6, 16
-    or t5, t5, t6
+    lbu t7, 2(t5)
+    slli t7, t7, 16
+    or t6, t6, t7
 
-    lbu t6, 3(t4)
-    slli t6, t6, 24
-    or t5, t5, t6
+    lbu t7, 3(t5)
+    slli t7, t7, 24
+    or t6, t6, t7
 
-    # 13) 存储到目标寄存器
-    slli t6, t3, 2     # 计算寄存器存储地址
-    add t6, t6, sp
-    sw t5, 0(t6)
+    # 12) 存储到 rd
+    slli t7, t4, 2
+    add t7, t7, sp
+    sw t6, 0(t7)
 
-    # 14) 跳过错误指令
-    csrr t0, mepc
-    addi t0, t0, 4
-    csrw mepc, t0
+    # 13) 跳过错误指令
+    addi t3, t3, 4
+    csrw mepc, t3
 
-    # 15) 恢复寄存器
+    # 14) 恢复寄存器
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -246,19 +240,17 @@ check_load_misaligned:
     lw x30, 120(sp)
     lw x31, 124(sp)
 
-    # 16) 释放栈空间并恢复 sp
+    # 15) 释放栈空间并恢复 sp
     addi sp, sp, 128
     csrrw sp, mscratch, sp
 
-    # 17) 返回用户模式
+    # 16) 返回用户模式
     mret
 
 go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
-
 
 
 
