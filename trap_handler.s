@@ -103,17 +103,16 @@ __mstart:
 ### Trap handler
 
 ### You will need to write your own trap handler functionality here.
+
+
+
 __mtrap:
-    # Swap sp and mscratch to get a kernel stack
+    # 1) 交换 sp 和 mscratch，使用内核栈
     csrrw sp, mscratch, sp
-    
-    # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
+
+    # 2) 申请 128 字节栈空间，保存所有寄存器
     addi sp, sp, -128
-    
-    # Save all registers to the stack
-    sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)  # Save the original user stack pointer
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -143,87 +142,79 @@ __mtrap:
     sw x29, 116(sp)
     sw x30, 120(sp)
     sw x31, 124(sp)
-    
-    # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
+
+    # 3) 读取 mcause
     csrr t0, mcause
-    li t1, 0x80000000    # Mask for highest bit
+
+    # 4) 检查最高位，如果是中断，则跳转到 terminate
+    li t1, 0x80000000   # 最高位掩码
     and t2, t0, t1
-    bnez t2, go_terminate  # If it's an interrupt, go to terminate
+    bnez t2, go_terminate
 
-    # ---- 新增：先检查 mcause == 0 (指令取址不对齐) ----
-    li t1, 0
-    beq t0, t1, go_terminate   # 如果是 instruction fetch misalignment，直接终止
-    
-    # Check if the exception is a misaligned load address (cause = 4)
-    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
-    and t0, t0, t2          # Clear the highest bit to get the exception code
-    li t1, 4                # Misaligned load address exception code
-    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    # 5) 检查是否是取指令未对齐异常 (mcause = 0)
+    li t1, 0x7FFFFFFF   # 只保留 mcause 的低 31 位
+    and t0, t0, t1
+    li t1, 0            # 指令未对齐异常的 mcause 值
+    bne t0, t1, check_load_misaligned
 
+    # 6) 读取 mtval 和 mepc，比较是否相等
+    csrr t2, mtval
+    csrr t3, mepc
+    beq t2, t3, go_terminate  # 如果 mtval == mepc，说明是取指令异常，直接终止
 
-    
+check_load_misaligned:
+    # 7) 检查是否是 Misaligned Load (mcause = 4)
+    li t1, 4
+    bne t0, t1, go_terminate
+
+    # 8) 读取导致异常的指令
+    csrr t0, mepc
+    lw t1, 0(t0)   # t1 = 触发异常的指令
+
+    # 9) 检查指令是否是 lw
+    li t2, 0x7F    # 提取 opcode (bits 0-6)
+    and t3, t1, t2
+    li t2, 0x03    # lw 的 opcode (0000011)
+    bne t3, t2, go_terminate
+
+    li t2, 0x7000  # 提取 funct3 (bits 12-14)
+    and t3, t1, t2
+    li t2, 0x2000  # lw 的 funct3 (010)
+    bne t3, t2, go_terminate
+
+    # 10) 读取目标寄存器 rd
+    li t2, 0xF80   # 提取 rd (bits 7-11)
+    and t3, t1, t2
+    srli t3, t3, 7 # 右移 7 位获得 rd 编号
+
+    # 11) 读取 misaligned 地址
     csrr t4, mtval
-    csrr t5, mepc
-    bltu t4, t5, go_terminate   # mtval < mepc => 不是数据访问，终止
-    addi t6, t5, 2
-    bltu t6, t4, go_terminate   # mtval > mepc+2 => 不是数据访问，终止
-    
-    
-    # Get the instruction that caused the exception
-    csrr t0, mepc           # t0 = address of the instruction
-    lw t1, 0(t0)            # t1 = instruction
-    
-    # Check if the instruction is a load word (lw)
-    # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
-    # Opcode for loads is 0000011 (bits 0-6)
-    # Funct3 for lw is 010 (bits 12-14)
-    
-    li t2, 0x7F             # Mask for opcode (bits 0-6)
-    and t3, t1, t2          # Extract opcode
-    li t2, 0x03             # Load opcode (0000011)
-    bne t3, t2, go_terminate  # If not a load instruction, terminate
-    
-    li t2, 0x7000           # Mask for funct3 (bits 12-14)
-    and t3, t1, t2          # Extract funct3
-    li t2, 0x2000           # funct3 for lw (010)
-    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
-    
-    # Extract the destination register (rd) from the instruction (bits 7-11)
-    li t2, 0xF80            # Mask for rd (bits 7-11)
-    and t3, t1, t2          # Extract rd bits
-    srli t3, t3, 7          # Shift right to get the register number
-    
-    # Get the misaligned address from mtval
-    csrr t4, mtval          # t4 = misaligned address
-    
-    # Load the bytes individually and combine them
-    lbu t5, 0(t4)           # Load first byte (least significant)
-    lbu t6, 1(t4)           # Load second byte
-    slli t6, t6, 8          # Shift left by 8 bits
-    or t5, t5, t6           # Combine
-    
-    lbu t6, 2(t4)           # Load third byte
-    slli t6, t6, 16         # Shift left by 16 bits
-    or t5, t5, t6           # Combine
-    
-    lbu t6, 3(t4)           # Load fourth byte (most significant)
-    slli t6, t6, 24         # Shift left by 24 bits
-    or t5, t5, t6           # Combine
-    
-    # Now t5 contains the correctly loaded word
-    # Calculate the address in the stack where the destination register is saved
-    slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
-    add t6, t6, sp          # t6 = address of rd in the stack
-    
-    # Store the loaded value to the destination register's saved location
+
+    # 12) 逐字节读取数据并组合
+    lbu t5, 0(t4)      # 读取最低字节
+    lbu t6, 1(t4)
+    slli t6, t6, 8
+    or t5, t5, t6
+
+    lbu t6, 2(t4)
+    slli t6, t6, 16
+    or t5, t5, t6
+
+    lbu t6, 3(t4)
+    slli t6, t6, 24
+    or t5, t5, t6
+
+    # 13) 存储到目标寄存器
+    slli t6, t3, 2     # 计算寄存器存储地址
+    add t6, t6, sp
     sw t5, 0(t6)
-    
-    # Increment mepc to skip the faulting instruction
+
+    # 14) 跳过错误指令
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-    
-    # Restore all registers from the stack
+
+    # 15) 恢复寄存器
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -254,19 +245,22 @@ __mtrap:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-    
-    # Deallocate stack space and swap back to user stack
+
+    # 16) 释放栈空间并恢复 sp
     addi sp, sp, 128
     csrrw sp, mscratch, sp
-    
-    # Return from trap
+
+    # 17) 返回用户模式
     mret
 
 go_terminate:
-    # Restore stack before jumping to terminate
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
+
+
+
+
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
