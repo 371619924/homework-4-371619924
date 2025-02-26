@@ -170,30 +170,33 @@ __mtrap:
 
 # 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 4    # 4 = misaligned load
+    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
+    and     t0, t0, t1      # Clear the interrupt bit
+    li      t1, 4           # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6    # 6 = misaligned store
+    li      t1, 6           # 6 = misaligned store
     beq     t0, t1, handle_misaligned_store
-    j       terminate  
+    j       trap_fail  
 
 # 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # Read the faulting instruction
-    
+    lw      t1, 0(t0)   
+
     # Verify instruction is lw (check opcode and funct3)
     andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
     li      t3, 0x03           # Load opcode = 0x03
-    bne     t2, t3, terminate  # Not a load instruction
+    bne     t2, t3, trap_fail  # Not a load instruction
     
     srli    t2, t1, 12         # Extract funct3 (bits 12-14)
     andi    t2, t2, 0x7        # Mask for 3 bits
     li      t3, 2              # lw funct3 = 2
-    bne     t2, t3, terminate  # Not a lw instruction
+    bne     t2, t3, trap_fail  # Not a lw instruction
     
     # Extract destination register (rd) from instruction (bits 7-11)
     srli    t2, t1, 7
     andi    t2, t2, 0x1F       # Mask for 5 bits
+    mv      a7, t2             # Save destination register number in a7
     
     # Get misaligned address from mtval
     csrr    t3, mtval  
@@ -213,9 +216,16 @@ handle_misaligned_load:
     or      t4, t4, t5
 
     # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    slli    t2, a7, 2          # Multiply reg number by 4 to get offset
     add     t2, sp, t2         # Address of register's saved value
     sw      t4, 0(t2)          # Store value
+
+    # Special handling for SP (x2) as destination
+    li      t0, 2
+    bne     a7, t0, skip_mscratch_update
+    lw      t0, 8(sp)          # Load original sp value
+    csrw    mscratch, t0       # Update mscratch
+skip_mscratch_update:
 
     # Update mepc to point to the next instruction
     csrr    t0, mepc
@@ -296,6 +306,45 @@ restore_registers:
     csrrw   sp, mscratch, sp
     mret
 
+# 错误处理：恢复寄存器后跳转到terminate
+trap_fail:
+    # 恢复所有寄存器
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
+    lw      x10, 40(sp)
+    lw      x11, 44(sp)
+    lw      x12, 48(sp)
+    lw      x13, 52(sp)
+    lw      x14, 56(sp)
+    lw      x15, 60(sp)
+    lw      x16, 64(sp)
+    lw      x17, 68(sp)
+    lw      x18, 72(sp)
+    lw      x19, 76(sp)
+    lw      x20, 80(sp)
+    lw      x21, 84(sp)
+    lw      x22, 88(sp)
+    lw      x23, 92(sp)
+    lw      x24, 96(sp)
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
+
+    addi    sp, sp, 128
+    csrrw   sp, mscratch, sp
+    j       terminate
+
+    
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
