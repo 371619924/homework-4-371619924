@@ -177,20 +177,20 @@ __mtrap:
     j       terminate  
 
 handle_misaligned_load:
-    csrr    t0, mepc          # 获取触发异常的指令地址
+    csrr    t0, mepc
     lw      t1, 0(t0)         # t1 = faulting instruction
 
-    # 检查指令是否为 lw 指令：
+    # 检查是否为 lw 指令
     # 提取 opcode (指令低7位)
-    andi    t7, t1, 0x7F      # t7 = opcode
-    li      t8, 0x03          # lw 类指令的 opcode 为 0000011 (0x03)
-    bne     t7, t8, terminate # 如果 opcode 不匹配，跳转到 terminate
+    andi    t6, t1, 127       # t6 = (t1 & 0x7F), VRV下可用十进制 127
+    li      t5, 3             # lw 类指令的 opcode = 3 (0x03)
+    bne     t6, t5, terminate # 如果 opcode 不为 3，跳转终止
 
     # 提取 funct3 (指令位 [14:12])
-    srli    t7, t1, 12        # 将 funct3 位移到最低位
-    andi    t7, t7, 0x7       # t7 = funct3
-    li      t8, 0x2           # lw 的 funct3 为 010b (0x2)
-    bne     t7, t8, terminate # 如果 funct3 不匹配，跳转到 terminate
+    srli    t6, t1, 12        # 将 funct3 移到最低3位
+    andi    t6, t6, 7         # t6 = (t6 & 0x7)
+    li      t5, 2             # lw 的 funct3 = 2
+    bne     t6, t5, terminate # 如果 funct3 不为 2，跳转终止
 
     # 提取 lw 指令的目的寄存器 rd (位 [11:7])
     srli    t2, t1, 7         # t2 = t1 >> 7，rd位移到最低位
