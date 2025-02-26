@@ -130,21 +130,21 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 __mtrap:
-    # 1) 切换到内核栈
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-    # 2) 保存所有寄存器
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
-    sw      x0,   0(sp)
-    sw      x1,   4(sp)
-    sw      x2,   8(sp)
-    sw      x3,  12(sp)
-    sw      x4,  16(sp)
-    sw      x5,  20(sp)
-    sw      x6,  24(sp)
-    sw      x7,  28(sp)
-    sw      x8,  32(sp)
-    sw      x9,  36(sp)
+    sw      x0, 0(sp)
+    sw      x1, 4(sp)
+    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x3, 12(sp)
+    sw      x4, 16(sp)
+    sw      x5, 20(sp)
+    sw      x6, 24(sp)
+    sw      x7, 28(sp)
+    sw      x8, 32(sp)
+    sw      x9, 36(sp)
     sw      x10, 40(sp)
     sw      x11, 44(sp)
     sw      x12, 48(sp)
@@ -160,87 +160,35 @@ __mtrap:
     sw      x22, 88(sp)
     sw      x23, 92(sp)
     sw      x24, 96(sp)
-    sw      x25,100(sp)
-    sw      x26,104(sp)
-    sw      x27,108(sp)
-    sw      x28,112(sp)
-    sw      x29,116(sp)
-    sw      x30,120(sp)
-    sw      x31,124(sp)
+    sw      x25, 100(sp)
+    sw      x26, 104(sp)
+    sw      x27, 108(sp)
+    sw      x28, 112(sp)
+    sw      x29, 116(sp)
+    sw      x30, 120(sp)
+    sw      x31, 124(sp)
 
-    # 3) 检查 mcause
+# 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 0x7FFFFFFF
-    and     t0, t0, t1      # 去掉最高位 (interrupt bit)
+    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
+    and     t0, t0, t1      # Clear the interrupt bit
+    li      t1, 4           # 4 = misaligned load
+    beq     t0, t1, handle_misaligned_load
+    li      t1, 6           # 6 = misaligned store
+    beq     t0, t1, handle_misaligned_store
+    j       terminate  
 
-    # 如果是 misaligned load (4)，则检查是否 lw
-    li      t1, 4
-    beq     t0, t1, check_misaligned_load
-
-    # 如果是 misaligned store (6)，则检查是否 sw
-    li      t1, 6
-    beq     t0, t1, check_misaligned_store
-
-    # 其他异常，直接退出
-    j       terminate
-
-check_misaligned_load:
-    # 取出指令
-    csrr    t2, mepc
-    lw      t3, 0(t2)
-
-    # 检查 opcode (低7位) == 0x03
-    andi    t4, t3, 0x7F
-    li      t5, 0x03
-    bne     t4, t5, terminate
-
-    # 检查 funct3 (位 [14:12]) == 2 (lw)
-    srli    t4, t3, 12
-    andi    t4, t4, 0x7
-    li      t5, 2
-    bne     t4, t5, terminate
-
-    # 确认是 lw，跳转到模拟处理
-    j       handle_misaligned_load
-
-check_misaligned_store:
-    # 取出指令
-    csrr    t2, mepc
-    lw      t3, 0(t2)
-
-    # 检查 opcode (低7位) == 0x23 (store 指令)
-    andi    t4, t3, 0x7F
-    li      t5, 0x23
-    bne     t4, t5, terminate
-
-    # 检查 funct3 (位 [14:12]) == 2 (sw)
-    srli    t4, t3, 12
-    andi    t4, t4, 0x7
-    li      t5, 2
-    bne     t4, t5, terminate
-
-    # 确认是 sw，跳转到模拟处理
-    j       handle_misaligned_store
-
-
-# 处理 misaligned load
+# 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # Read the faulting instruction
-    
-    # Verify instruction is lw (check opcode and funct3)
-    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
-    li      t3, 0x03           # Load opcode = 0x03
-    bne     t2, t3, terminate  # Not a load instruction
-    
-    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
-    andi    t2, t2, 0x7        # Mask for 3 bits
-    li      t3, 2              # lw funct3 = 2
-    bne     t2, t3, terminate  # Not a lw instruction
+    lw      t1, 0(t0)   
+
+    # Extract destination register (rd) without verification checks
     
     # Extract destination register (rd) from instruction (bits 7-11)
     srli    t2, t1, 7
     andi    t2, t2, 0x1F       # Mask for 5 bits
+    mv      a7, t2             # Save destination register number in a7
     
     # Get misaligned address from mtval
     csrr    t3, mtval  
@@ -260,9 +208,16 @@ handle_misaligned_load:
     or      t4, t4, t5
 
     # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    slli    t2, a7, 2          # Multiply reg number by 4 to get offset
     add     t2, sp, t2         # Address of register's saved value
     sw      t4, 0(t2)          # Store value
+
+    # Special handling for SP (x2) as destination
+    li      t0, 2
+    bne     a7, t0, skip
+    lw      t0, 8(sp)          # Load original sp value
+    csrw    mscratch, t0       # Update mscratch
+skip:
 
     # Update mepc to point to the next instruction
     csrr    t0, mepc
@@ -271,9 +226,9 @@ handle_misaligned_load:
 
     j       restore_registers
 
-# 处理 misaligned store
+
+# 5) Handle misaligned store (sw)
 handle_misaligned_store:
-    
     csrr    t0, mepc
     lw      t1, 0(t0)   # Read the faulting instruction
 
@@ -306,17 +261,16 @@ handle_misaligned_store:
     j       restore_registers
 
 
+# 6) Restore registers and return
 restore_registers:
-    lw      x0,   0(sp)
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
@@ -332,18 +286,17 @@ restore_registers:
     lw      x22, 88(sp)
     lw      x23, 92(sp)
     lw      x24, 96(sp)
-    lw      x25,100(sp)
-    lw      x26,104(sp)
-    lw      x27,108(sp)
-    lw      x28,112(sp)
-    lw      x29,116(sp)
-    lw      x30,120(sp)
-    lw      x31,124(sp)
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
 
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 
 
