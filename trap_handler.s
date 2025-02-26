@@ -131,20 +131,15 @@ __mstart:
 ### Trap handler
 
 
-# Trap handler with opcode/funct3 checking for LW only
 __mtrap:
-    ################################################################
-    # 1) 交换 sp 和 mscratch，使内核使用自己的栈
-    ################################################################
+    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-    ################################################################
-    # 2) 保存所有寄存器（共 32 个，每个 4 字节，共 128 字节）
-    ################################################################
+    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)
+    sw      x2, 8(sp)   # Save sp (x2)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -175,99 +170,81 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    ################################################################
-    # 3) 检查 mcause
-    #    - 若最高位为 1（中断） => 直接终止
-    #    - 若 mcause != 4 (Misaligned Load) => 直接终止
-    ################################################################
+    # 3) Check if mcause highest bit is 1 (interrupt)
     csrr    t0, mcause
-    li      t1, 0x80000000     # 32 位系统中最高位的掩码
-    and     t2, t0, t1
-    bnez    t2, terminate      # 如果最高位为 1 => 中断 => 终止
+    li      t1, 0x80000000  # Mask for the interrupt bit (bit 31)
+    and     t2, t0, t1      # Extract the interrupt bit
+    bne     t2, zero, terminate  # If interrupt bit is set, terminate
 
-    # 只处理 cause = 4 (misaligned load)
-    li      t1, 4
-    beq     t0, t1, handle_misaligned_load
-    j       terminate
+    # 4) Check trap cause (mcause)
+    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
+    and     t0, t0, t1      # Clear the interrupt bit
+    li      t1, 4    # 4 = misaligned load
+    bne     t0, t1, terminate  # If not misaligned load, terminate
 
-####################################################################
-# 4) 处理 misaligned load (仅针对 lw)
-####################################################################
-handle_misaligned_load:
-    # 读取故障指令
+    # 5) Handle misaligned load (lw)
     csrr    t0, mepc
-    lw      t1, 0(t0)         # t1 中保存了 faulting 指令
+    lw      t1, 0(t0)   # Read the faulting instruction
+    
+    # Verify instruction is lw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
+    bne     t2, t3, terminate  # Not a load instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
+    
+    # Extract destination register (rd) from instruction (bits 7-11)
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
 
-    #-------------------------
-    # 4.1) 检查 opcode
-    #     RISC-V 指令最低 7 位是 opcode
-    #     LW 的 opcode 是 0x03，但需结合 funct3 才能确认是 LW
-    #-------------------------
-    andi    t2, t1, 0x7F      # 取出最低 7 位
-    li      t4, 0x03
-    bne     t2, t4, terminate # 若不是 opcode=3，直接终止
-
-    #-------------------------
-    # 4.2) 检查 funct3
-    #     对于 LW 而言，funct3 = 0b010 (十进制 2)
-    #     bits [14:12] 即 t1 >> 12 & 0x7
-    #-------------------------
-    srli    t3, t1, 12
-    andi    t3, t3, 0x7
-    li      t4, 2             # 0b010
-    bne     t3, t4, terminate # 若 funct3 != 2 => 不是 LW => 终止
-
-    #-------------------------
-    # 4.3) 提取目标寄存器 (rd)
-    #     rd 位于指令的 [11:7]
-    #-------------------------
-    srli    t2, t1, 7         # 右移 7 位，使原 [11:7] 移到最低位
-    andi    t2, t2, 0x1F      # 只保留 5 位 => 得到寄存器编号
-
-    #-------------------------
-    # 4.4) 从 mtval 获取发生错位的地址
-    #     并从该地址一次读 4 个字节 (little-endian)
-    #-------------------------
-    csrr    t3, mtval
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
+    # Perform unaligned load byte by byte
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
     slli    t5, t5, 8
     or      t4, t4, t5
-    lbu     t5, 2(t3)
+
+    lbu     t5, 2(t3)          # Load 3rd byte
     slli    t5, t5, 16
     or      t4, t4, t5
-    lbu     t5, 3(t3)
+
+    lbu     t5, 3(t3)          # Load 4th byte
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # 将重构的 32 位数据存到保存区里对应的 rd 寄存器位置
-    slli    t2, t2, 2         # rd * 4 => 偏移量
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    # Store the loaded value to the destination register's location on stack
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
 
-    #-------------------------
-    # 4.5) 前移 mepc，让 PC 指向下一条指令
-    #-------------------------
+    # Special handling for SP (x2) as destination
+    srli    t0, t1, 7          # Extract rd again
+    andi    t0, t0, 0x1F       # Mask for 5 bits
+    li      t6, 2              # x2 = sp
+    bne     t0, t6, skip_sp_update
+    lw      t0, 8(sp)          # Load original sp value
+    csrw    mscratch, t0       # Update mscratch
+skip_sp_update:
+
+    # Update mepc to point to the next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
-    j       restore_registers
-
-####################################################################
-# 5) 恢复所有寄存器并返回
-####################################################################
-restore_registers:
-    lw      x0,  0(sp)
-    lw      x1,  4(sp)
-    lw      x2,  8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
+    # Restore registers and return
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
