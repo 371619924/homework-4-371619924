@@ -130,14 +130,14 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 __mtrap:
-    # 1) 交换 sp 与 mscratch，使内核使用自己的栈
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-    # 2) 将所有寄存器保存到内核栈（共 128 字节 = 32 个寄存器 * 4 字节）
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)   # 保存 sp (x2)
+    sw      x2, 8(sp)   # Save sp (x2)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -168,107 +168,98 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # 3) 检查陷入原因（mcause）
+# 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 4          # 4 = misaligned load
-    beq     t0, t1, check_load_instr  # 如果 mcause==4，处理 misaligned load
-
-    # 如果不是 misaligned load，则检查是否为 misaligned store
-    li      t1, 6          # 6 = misaligned store
+    li      t1, 4    # 4 = misaligned load
+    beq     t0, t1, handle_misaligned_load
+    li      t1, 6    # 6 = misaligned store
     beq     t0, t1, handle_misaligned_store
+    j       terminate  
 
-    # 其他异常，转到错误处理
-    j       terminate
-
-# 3a) 对 misaligned load 异常，进一步检查 faulting 指令的 opcode 和 funct3
-check_load_instr:
-    csrr    t0, mepc       # 取出 faulting 指令的地址
-    lw      t1, 0(t0)      # 读出 faulting 指令
-
-    # 检查 opcode：取指令低 7 位，要求等于 0x03（Load 指令）
-    andi    t2, t1, 0x7F   # t2 = 指令[6:0]
-    li      t3, 0x03
-    bne     t2, t3, terminate   # opcode 不对，则终止异常处理
-
-    # 检查 funct3：取指令位 [14:12]，要求等于 2（lw 指令对应 010）
-    srli    t2, t1, 12     # 将指令右移 12 位，使 funct3 位于低位
-    andi    t2, t2, 0x7    # 提取低 3 位，即 funct3
-    li      t3, 2          # lw 的 funct3 应为 2
-    bne     t2, t3, terminate   # 如果不是 lw 指令，则错误处理
-
-    # 所有检查通过，继续处理 misaligned load
-    j       handle_misaligned_load
-
-# 4) 处理 misaligned load (lw)
+# 4) Handle misaligned load (lw)
 handle_misaligned_load:
-    # 此时我们已确认：
-    #  - mcause == 4 (misaligned load)
-    #  - faulting 指令的 opcode == 0x03 (load 指令)
-    #  - faulting 指令的 funct3 == 2 (lw 指令)
-
     csrr    t0, mepc
-    lw      t1, 0(t0)      # 重新读取 faulting 指令
-    # 提取目的寄存器号 rd（指令位 [11:7]）
+    lw      t1, 0(t0)   # Read the faulting instruction
+    
+    # Verify instruction is lw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
+    bne     t2, t3, terminate  # Not a load instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
+    
+    # Extract destination register (rd) from instruction (bits 7-11)
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F  # t2 = rd
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
 
-    # 利用 mtval 中保存的未对齐内存地址，模拟 lw 进行 4 字节加载
-    csrr    t3, mtval     # t3 = faulting 内存地址
-    lbu     t4, 0(t3)     # 读取字节 0
-    lbu     t5, 1(t3)     # 读取字节 1
+    # Perform unaligned load byte by byte
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
     slli    t5, t5, 8
     or      t4, t4, t5
-    lbu     t5, 2(t3)     # 读取字节 2
+
+    lbu     t5, 2(t3)          # Load 3rd byte
     slli    t5, t5, 16
     or      t4, t4, t5
-    lbu     t5, 3(t3)     # 读取字节 3
+
+    lbu     t5, 3(t3)          # Load 4th byte
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # 将模拟加载得到的 32 位结果写回到保存的目的寄存器所在的内核栈位置
-    slli    t2, t2, 2     # 计算寄存器在栈中的偏移（rd * 4）
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    # Store the loaded value to the destination register's location on stack
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
 
-    # 更新 mepc，指向下一条指令（lw 为 32 位指令，pc+4）
+    # Update mepc to point to the next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
-# 5) 处理 misaligned store (sw)
+
+# 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)
+    lw      t1, 0(t0)   # Read the faulting instruction
 
-    # 提取 store 指令中的寄存器号（例如 rs2，位 [24:20]）
+    # Extract source register (rs2) from instruction (bits 20-24)
     srli    t2, t1, 20
-    andi    t2, t2, 0x1F
+    andi    t2, t2, 0x1F  
 
-    csrr    t3, mtval
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
 
-    slli    t4, t2, 2
-    add     t4, sp, t4
-    lw      t5, 0(t4)
+    # Get value to store from register's saved location
+    slli    t4, t2, 2       # Multiply reg number by 4 to get offset
+    add     t4, sp, t4      # Address of register's saved value
+    lw      t5, 0(t4)       # Load the value to store
 
-    # 模拟 sw，将 32 位数据按字节写入未对齐地址
-    sb      t5, 0(t3)
+    # Perform unaligned store byte by byte
+    sb      t5, 0(t3)       # Store 1st byte
     srli    t5, t5, 8
-    sb      t5, 1(t3)
+    sb      t5, 1(t3)       # Store 2nd byte
     srli    t5, t5, 8
-    sb      t5, 2(t3)
+    sb      t5, 2(t3)       # Store 3rd byte
     srli    t5, t5, 8
-    sb      t5, 3(t3)
+    sb      t5, 3(t3)       # Store 4th byte
 
-    # 更新 mepc，指向下一条指令
+    # Update mepc to point to the next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
-# 6) 恢复寄存器并返回
+
+# 6) Restore registers and return
 restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
@@ -304,7 +295,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
