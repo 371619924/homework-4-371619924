@@ -272,7 +272,6 @@ skip_sp_update:
     csrrw   sp, mscratch, sp
     mret
 
-
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
