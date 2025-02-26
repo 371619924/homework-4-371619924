@@ -172,7 +172,7 @@ __mtrap:
 
     # Check if this is a misaligned load exception (mcause == 4)
     csrr    t0, mcause
-    li      t1, MISALIGNED_LOAD
+    li      t1, 4           # Misaligned load address exception code = 4
     bne     t0, t1, not_misaligned_load
 
     # Check if the instruction is lw (load word)
@@ -181,13 +181,13 @@ __mtrap:
 
     # Extract opcode (bits 6-0)
     andi    t2, t1, 0x7F
-    li      t3, LOAD_OPCODE
+    li      t3, 0x3         # Load opcode = 0x3
     bne     t2, t3, not_misaligned_load
 
     # Extract funct3 (bits 14-12)
     srli    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, LW_FUNCT3
+    li      t3, 0x2         # LW funct3 = 0x2
     bne     t2, t3, not_misaligned_load
 
     # It is a misaligned lw instruction - extract destination register rd (bits 11-7)
