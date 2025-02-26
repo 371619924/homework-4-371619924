@@ -129,7 +129,7 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
 ### Trap handler
-
+__mtrap:
     # 1) 交换 sp 与 mscratch，使内核使用自己的栈
     csrrw   sp, mscratch, sp
 
