@@ -178,7 +178,8 @@ __mtrap:
     bnez t2, go_terminate  # If it's an interrupt, go to terminate
     
     # Check if the exception is a misaligned load address (cause = 4)
-    andi t0, t0, 0x7FFFFFFF  # Clear the highest bit to get the exception code
+    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
+    and t0, t0, t2          # Clear the highest bit to get the exception code
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
     
@@ -280,7 +281,6 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
 # keeping this in this form to make it easier for you to debug.
