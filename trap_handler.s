@@ -130,8 +130,6 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 
-        .section .text
-        .global __mtrap
 
 __mtrap:
     # 1) 换栈：把当前 sp 和 mscratch 互换，避免破坏用户栈
