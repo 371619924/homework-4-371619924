@@ -170,8 +170,8 @@ __mtrap:
 
 # 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 0x7FFFFFFF    # Mask to clear interrupt bit (bit 31)
-    and     t0, t0, t1        # Clear the interrupt bit
+    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
+    and     t0, t0, t1      # Clear the interrupt bit
     li      t1, 4    # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
     li      t1, 6    # 6 = misaligned store
@@ -181,46 +181,46 @@ __mtrap:
 # 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)   
-
-    # Verify instruction is lw (check opcode and funct3)
-    andi    t6, t1, 0x7F       # Extract opcode (bits 0-6)
-    li      t5, 0x03           # Load opcode = 0x03
-    bne     t6, t5, terminate  # Not a load instruction
+    lw      t1, 0(t0)   # Read the faulting instruction
     
-    srli    t6, t1, 12         # Extract funct3 (bits 12-14)
-    andi    t6, t6, 0x7        # Mask for 3 bits
-    li      t5, 2              # lw funct3 = 2
-    bne     t6, t5, terminate  # Not a lw instruction
+    # Verify instruction is lw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
+    bne     t2, t3, terminate  # Not a load instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
     
     # Extract destination register (rd) from instruction (bits 7-11)
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F  
-
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
     # Get misaligned address from mtval
     csrr    t3, mtval  
 
     # Perform unaligned load byte by byte
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lbu     t5, 2(t3)
+    lbu     t5, 2(t3)          # Load 3rd byte
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lbu     t5, 3(t3)
+    lbu     t5, 3(t3)          # Load 4th byte
     slli    t5, t5, 24
     or      t4, t4, t5
 
     # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
 
     # Special handling for SP (x2) as destination
-    srli    t0, t1, 7          # Extract rd again (destination register)
+    srli    t0, t1, 7          # Extract rd again
     andi    t0, t0, 0x1F       # Mask for 5 bits
     li      t6, 2              # x2 = sp
     bne     t0, t6, skip
@@ -239,30 +239,30 @@ skip:
 # 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)   
+    lw      t1, 0(t0)   # Read the faulting instruction
 
-    
+    # Extract source register (rs2) from instruction (bits 20-24)
     srli    t2, t1, 20
     andi    t2, t2, 0x1F  
 
-    
+    # Get misaligned address from mtval
     csrr    t3, mtval  
 
-    
-    slli    t4, t2, 2
-    add     t4, sp, t4
-    lw      t5, 0(t4)   
+    # Get value to store from register's saved location
+    slli    t4, t2, 2       # Multiply reg number by 4 to get offset
+    add     t4, sp, t4      # Address of register's saved value
+    lw      t5, 0(t4)       # Load the value to store
 
-    
-    sb      t5, 0(t3)
+    # Perform unaligned store byte by byte
+    sb      t5, 0(t3)       # Store 1st byte
     srli    t5, t5, 8
-    sb      t5, 1(t3)
+    sb      t5, 1(t3)       # Store 2nd byte
     srli    t5, t5, 8
-    sb      t5, 2(t3)
+    sb      t5, 2(t3)       # Store 3rd byte
     srli    t5, t5, 8
-    sb      t5, 3(t3)
+    sb      t5, 3(t3)       # Store 4th byte
 
-    
+    # Update mepc to point to the next instruction
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
@@ -306,7 +306,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
