@@ -170,16 +170,19 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-# 3) Check trap cause (mcause)
+# 3) Check if mcause highest bit is 1 (interrupt)
     csrr    t0, mcause
+    li      t1, 0x80000000  # Mask for the interrupt bit (bit 31)
+    and     t2, t0, t1      # Extract the interrupt bit
+    bne     t2, zero, terminate  # If interrupt bit is set, terminate
+
+# 4) Check trap cause (mcause)
     li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
     and     t0, t0, t1      # Clear the interrupt bit
     li      t1, 4    # 4 = misaligned load
-    beq     t0, t1, handle_misaligned_load
-    j       terminate  
+    bne     t0, t1, terminate  # If not misaligned load, terminate
 
-# 4) Handle misaligned load (lw)
-handle_misaligned_load:
+# 5) Handle misaligned load (lw)
     csrr    t0, mepc
     lw      t1, 0(t0)   # Read the faulting instruction
     
@@ -235,7 +238,7 @@ skip:
 
     j       restore_registers
 
-# 5) Restore registers and return
+# 6) Restore registers and return
 restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
