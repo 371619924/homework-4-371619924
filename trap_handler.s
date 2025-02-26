@@ -132,14 +132,14 @@ __mstart:
 
 
 __mtrap:
-# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # 1) 交换 sp 和 mscratch，使内核使用自己的栈
     csrrw   sp, mscratch, sp
 
-# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # 2) 保存所有寄存器（共 32 个，每个 4 字节，共 128 字节）
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x2, 8(sp)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -170,77 +170,57 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-# 3) Check if mcause highest bit is 1 (interrupt)
+    # 3) 检查 mcause
+    # 首先判断最高位是否为 1（表示中断），若是则直接终止
     csrr    t0, mcause
-    li      t1, 0x80000000  # Mask for the interrupt bit (bit 31)
-    and     t2, t0, t1      # Extract the interrupt bit
-    bne     t2, zero, terminate  # If interrupt bit is set, terminate
+    li      t1, 0x80000000     # 32位系统中最高位的掩码
+    and     t2, t0, t1
+    bnez    t2, terminate      # 如果最高位为1，则为中断，直接终止
 
-# 4) Check trap cause (mcause)
-    li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
-    and     t0, t0, t1      # Clear the interrupt bit
-    li      t1, 4    # 4 = misaligned load
-    bne     t0, t1, terminate  # If not misaligned load, terminate
+    # 接下来只允许 misaligned load word 异常（cause = 4）
+    li      t1, 4
+    beq     t0, t1, handle_misaligned_load
+    j       terminate        # 非 misaligned load 则终止
 
-# 5) Handle misaligned load (lw)
-    csrr    t0, mepc
-    lw      t1, 0(t0)   # Read the faulting instruction
-    
-    # Verify instruction is lw (check opcode and funct3)
-    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
-    li      t3, 0x03           # Load opcode = 0x03
-    bne     t2, t3, terminate  # Not a load instruction
-    
-    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
-    andi    t2, t2, 0x7        # Mask for 3 bits
-    li      t3, 2              # lw funct3 = 2
-    bne     t2, t3, terminate  # Not a lw instruction
-    
-    # Extract destination register (rd) from instruction (bits 7-11)
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F       # Mask for 5 bits
-    
-    # Get misaligned address from mtval
-    csrr    t3, mtval  
+handle_misaligned_load:
+    # 4) 处理 misaligned load (lw)
+    csrr    t0, mepc         # 获取发生异常的指令地址
+    lw      t1, 0(t0)        # 取出故障指令
 
-    # Perform unaligned load byte by byte
-    lbu     t4, 0(t3)          # Load 1st byte
-    lbu     t5, 1(t3)          # Load 2nd byte
+    # 提取目标寄存器编号：对于 lw，目标寄存器（rd）位于指令的 [11:7] 位
+    srli    t2, t1, 7        # 右移7位，使得原来的 [11:7] 位移到低位
+    andi    t2, t2, 0x1F     # 屏蔽，只保留低5位，得到目标寄存器编号
+
+    csrr    t3, mtval        # 从 mtval 中取出导致异常的内存地址
+    # 从内存地址处按字节读取 4 个字节，重构 32 位数据
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
-
-    lbu     t5, 2(t3)          # Load 3rd byte
+    lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
-
-    lbu     t5, 3(t3)          # Load 4th byte
+    lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
-    add     t2, sp, t2         # Address of register's saved value
-    sw      t4, 0(t2)          # Store value
+    # 将重构的 32 位数据写回保存的寄存器区对应目标寄存器的位置
+    slli    t2, t2, 2        # 乘以 4 得到相应偏移
+    add     t2, sp, t2       # 计算在保存区域中的地址
+    sw      t4, 0(t2)
 
-    # Special handling for SP (x2) as destination
-    srli    t0, t1, 7          # Extract rd again
-    andi    t0, t0, 0x1F       # Mask for 5 bits
-    li      t6, 2              # x2 = sp
-    bne     t0, t6, skip
-    lw      t0, 8(sp)          # Load original sp value
-    csrw    mscratch, t0       # Update mscratch
-skip:
-
-    # Update mepc to point to the next instruction
+    # 增加 mepc 4，跳过 faulting 指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
-# 6) Restore registers and return
 restore_registers:
+    # 5) 恢复所有寄存器
+    lw      x0, 0(sp)    # x0 固定为 0，不过这里恢复一下保持一致
     lw      x1, 4(sp)
+    lw      x2, 8(sp)
     lw      x3, 12(sp)
     lw      x4, 16(sp)
     lw      x5, 20(sp)
@@ -274,6 +254,7 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
+
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
