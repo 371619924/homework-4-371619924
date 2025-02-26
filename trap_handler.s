@@ -130,10 +130,10 @@ __mstart:
 # Trap handler for misaligned load word exceptions
 ### Trap handler
 __mtrap:
-    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
@@ -168,68 +168,71 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # 3) Check trap cause (mcause)
+# 3) Check trap cause (mcause)
     csrr    t0, mcause
     li      t1, 0x7FFFFFFF  # Mask to clear interrupt bit (bit 31)
     and     t0, t0, t1      # Clear the interrupt bit
-    li      t1, CAUSE_MISALIGNED_LOAD  # 4 = misaligned load
+    li      t1, 4           # 4 = misaligned load
     bne     t0, t1, terminate  # If not a misaligned load, terminate
 
-    # 4) Handle misaligned load word
-    csrr    t0, mepc        # Get trapped instruction address
-    lw      t1, 0(t0)       # Read the faulting instruction
+# 4) Handle misaligned load (lw)
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # Read the faulting instruction
     
     # Verify instruction is lw (check opcode and funct3)
-    andi    t2, t1, 0x7F    # Extract opcode (bits 0-6)
-    li      t3, 0x03        # Load opcode = 0x03
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
     bne     t2, t3, terminate  # Not a load instruction
     
-    srli    t2, t1, 12      # Extract funct3 (bits 12-14)
-    andi    t2, t2, 0x7     # Mask for 3 bits
-    li      t3, 2           # lw funct3 = 2
-    bne     t2, t3, terminate  # Not a word load instruction
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
     
     # Extract destination register (rd) from instruction (bits 7-11)
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F    # Mask for 5 bits
+    andi    t2, t2, 0x1F       # Mask for 5 bits
     
     # Get misaligned address from mtval
     csrr    t3, mtval  
 
     # Perform unaligned load byte by byte
-    lbu     t4, 0(t3)       # Load 1st byte
-    lbu     t5, 1(t3)       # Load 2nd byte
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lbu     t5, 2(t3)       # Load 3rd byte
+    lbu     t5, 2(t3)          # Load 3rd byte
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lbu     t5, 3(t3)       # Load 4th byte
+    lbu     t5, 3(t3)          # Load 4th byte
     slli    t5, t5, 24
     or      t4, t4, t5
 
     # Store the loaded value to the destination register's location on stack
-    slli    t2, t2, 2       # Multiply reg number by 4 to get offset
-    add     t2, sp, t2      # Address of register's saved value
-    sw      t4, 0(t2)       # Store value to saved register location
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
 
     # Special handling for SP (x2) as destination
-    srli    t0, t1, 7       # Extract rd again
-    andi    t0, t0, 0x1F    # Mask for 5 bits
-    li      t6, 2           # x2 = sp
-    bne     t0, t6, skip_sp_handling
-    lw      t0, 8(sp)       # Load original sp value
-    csrw    mscratch, t0    # Update mscratch with new sp value
-skip_sp_handling:
+    srli    t0, t1, 7          # Extract rd again
+    andi    t0, t0, 0x1F       # Mask for 5 bits
+    li      t6, 2              # x2 = sp
+    bne     t0, t6, skip
+    lw      t0, 8(sp)          # Load original sp value
+    csrw    mscratch, t0       # Update mscratch
+skip:
 
     # Update mepc to point to the next instruction
     csrr    t0, mepc
-    addi    t0, t0, 4       # Increment PC by 4 bytes (instruction size)
+    addi    t0, t0, 4
     csrw    mepc, t0
 
-    # Restore registers and return
+    j       restore_registers
+
+# 5) Restore registers and return
+restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
     lw      x4, 16(sp)
@@ -261,10 +264,9 @@ skip_sp_handling:
     lw      x30, 120(sp)
     lw      x31, 124(sp)
 
-    addi    sp, sp, 128     # Restore stack pointer
-    csrrw   sp, mscratch, sp  # Swap back to user stack
-    mret                     # Return from trap
-
+    addi    sp, sp, 128
+    csrrw   sp, mscratch, sp
+    mret
 
 
 
