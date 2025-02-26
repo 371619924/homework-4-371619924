@@ -170,55 +170,55 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # Check if this is a misaligned load exception (mcause == 4)
     csrr    t0, mcause
-    li      t1, 4           # Misaligned load address exception code = 4
+    li      t1, 4           # Misaligned load address = 4
     bne     t0, t1, not_misaligned_load
 
-    # Check if the instruction is lw (load word)
+    # 判断是不是 lw 指令
     csrr    t0, mepc
-    lw      t1, 0(t0)       # Get the instruction that caused the trap
-
-    # Extract opcode (bits 6-0)
+    lw      t1, 0(t0)
     andi    t2, t1, 0x7F
-    li      t3, 0x3         # Load opcode = 0x3
+    li      t3, 0x3
     bne     t2, t3, not_misaligned_load
 
-    # Extract funct3 (bits 14-12)
     srli    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 0x2         # LW funct3 = 0x2
+    li      t3, 0x2
     bne     t2, t3, not_misaligned_load
 
-    # It is a misaligned lw instruction - extract destination register rd (bits 11-7)
+    # 提取 rd
     srli    t0, t1, 7
-    andi    t0, t0, 0x1F    # rd is in t0
+    andi    t0, t0, 0x1F
 
-    # Get the address that caused the fault from mtval
-    csrr    t1, mtval       # t1 = misaligned address
+    # mtval 里是未对齐的地址
+    csrr    t1, mtval
 
-    # Load 4 bytes individually using byte loads
-    lb      t2, 0(t1)       # First byte (sign extended)
-    lbu     t3, 1(t1)       # Other bytes (zero extended)
+    # (修正后) 分别用 lbu 取四个字节，再统一符号扩展
+    lbu     t2, 0(t1)
+    lbu     t3, 1(t1)
     lbu     t4, 2(t1)
     lbu     t5, 3(t1)
 
-    # Combine bytes for little-endian
     slli    t3, t3, 8
-    slli    t4, t4, 16
-    slli    t5, t5, 24
     or      t2, t2, t3
+    slli    t4, t4, 16
     or      t2, t2, t4
-    or      t2, t2, t5      # Combined word is in t2
+    slli    t5, t5, 24
+    or      t2, t2, t5
 
-    # Store result in the saved register slot on stack
-    slli    t0, t0, 2       # t0 = rd * 4 (offset in stack)
-    add     t0, sp, t0      # t0 = address of saved register in stack
-    sw      t2, 0(t0)       # Update the saved register value
+    # 需要在 64 位寄存器里保留符号时，再做一次符号扩展
+    # 对于 32 位环境可不写这两句
+    slli    t2, t2, 24
+    srai    t2, t2, 24
 
-    # Increment mepc to skip the instruction that caused the exception
+    # 写回到保存的 rd 寄存器槽里
+    slli    t0, t0, 2
+    add     t0, sp, t0
+    sw      t2, 0(t0)
+
+    # 跳过出错的那条 lw 指令
     csrr    t0, mepc
-    addi    t0, t0, 4       # Move to next instruction
+    addi    t0, t0, 4
     csrw    mepc, t0
 
     # Restore all registers with the updated values
