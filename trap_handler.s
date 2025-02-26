@@ -222,22 +222,90 @@ check_misaligned_store:
     # 确认是 sw，跳转到模拟处理
     j       handle_misaligned_store
 
-# ---------------------------------------
+
 # 处理 misaligned load
 handle_misaligned_load:
-    # (这里与之前相同) 提取 rd, 从 mtval 读4字节拼接
-    # 写回栈中对应寄存器，mepc += 4
-    # ...
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # Read the faulting instruction
+    
+    # Verify instruction is lw (check opcode and funct3)
+    andi    t2, t1, 0x7F       # Extract opcode (bits 0-6)
+    li      t3, 0x03           # Load opcode = 0x03
+    bne     t2, t3, terminate  # Not a load instruction
+    
+    srli    t2, t1, 12         # Extract funct3 (bits 12-14)
+    andi    t2, t2, 0x7        # Mask for 3 bits
+    li      t3, 2              # lw funct3 = 2
+    bne     t2, t3, terminate  # Not a lw instruction
+    
+    # Extract destination register (rd) from instruction (bits 7-11)
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F       # Mask for 5 bits
+    
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
+
+    # Perform unaligned load byte by byte
+    lbu     t4, 0(t3)          # Load 1st byte
+    lbu     t5, 1(t3)          # Load 2nd byte
+    slli    t5, t5, 8
+    or      t4, t4, t5
+
+    lbu     t5, 2(t3)          # Load 3rd byte
+    slli    t5, t5, 16
+    or      t4, t4, t5
+
+    lbu     t5, 3(t3)          # Load 4th byte
+    slli    t5, t5, 24
+    or      t4, t4, t5
+
+    # Store the loaded value to the destination register's location on stack
+    slli    t2, t2, 2          # Multiply reg number by 4 to get offset
+    add     t2, sp, t2         # Address of register's saved value
+    sw      t4, 0(t2)          # Store value
+
+    # Update mepc to point to the next instruction
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+
     j       restore_registers
 
 # 处理 misaligned store
 handle_misaligned_store:
-    # (这里与之前相同) 提取 rs2, 从栈里拿数据
-    # 按字节写回 mtval, mepc += 4
-    # ...
+    
+    csrr    t0, mepc
+    lw      t1, 0(t0)   # Read the faulting instruction
+
+    # Extract source register (rs2) from instruction (bits 20-24)
+    srli    t2, t1, 20
+    andi    t2, t2, 0x1F  
+
+    # Get misaligned address from mtval
+    csrr    t3, mtval  
+
+    # Get value to store from register's saved location
+    slli    t4, t2, 2       # Multiply reg number by 4 to get offset
+    add     t4, sp, t4      # Address of register's saved value
+    lw      t5, 0(t4)       # Load the value to store
+
+    # Perform unaligned store byte by byte
+    sb      t5, 0(t3)       # Store 1st byte
+    srli    t5, t5, 8
+    sb      t5, 1(t3)       # Store 2nd byte
+    srli    t5, t5, 8
+    sb      t5, 2(t3)       # Store 3rd byte
+    srli    t5, t5, 8
+    sb      t5, 3(t3)       # Store 4th byte
+
+    # Update mepc to point to the next instruction
+    csrr    t0, mepc
+    addi    t0, t0, 4
+    csrw    mepc, t0
+
     j       restore_registers
 
-# ---------------------------------------
+
 restore_registers:
     lw      x0,   0(sp)
     lw      x1,   4(sp)
