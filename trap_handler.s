@@ -176,7 +176,7 @@ handle_instruction_fault:
     # For instruction faults, get the next aligned address after mtval
     csrr t0, mtval
     addi t0, t0, 3          # Add 3 to round up to next multiple of 4
-    li t1, ~3               # Create mask to clear lower 2 bits (0xFFFFFFFC)
+    li t1, -4               # Create mask to clear lower 2 bits (0xFFFFFFFC)
     and t0, t0, t1          # t0 now contains next aligned address
     
     # Set mepc to this aligned address
@@ -294,7 +294,7 @@ go_terminate:
     csrrw sp, mscratch, sp
     j terminate
 
-    
+
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
