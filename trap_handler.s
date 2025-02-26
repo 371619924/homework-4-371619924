@@ -131,14 +131,14 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # 1) 交换栈指针：将 sp 与 mscratch 寄存器交换，内核使用自己的栈
     csrrw   sp, mscratch, sp
 
-    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # 2) 将所有寄存器保存到内核栈（128 字节 = 32 个寄存器 * 4 字节）
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
-    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x2, 8(sp)    # 保存 sp (x2)
     sw      x3, 12(sp)
     sw      x4, 16(sp)
     sw      x5, 20(sp)
@@ -169,71 +169,80 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # 3) Check trap cause (mcause)
+    # 3) 检查异常原因（mcause）
     csrr    t0, mcause
-    li      t1, 4    # 4 = misaligned load
+    li      t1, 4          # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6    # 6 = misaligned store
+    li      t1, 6          # 6 = misaligned store
     beq     t0, t1, handle_misaligned_store
     j       terminate  
 
-# 4) Handle misaligned load (lw)
+# 对于不是 lw 引起的异常，跳转到 _trap_fail
+_trap_fail:
+    j       terminate
+
+# 4) 处理 misaligned load（lw）异常
 handle_misaligned_load:
-    csrr    t0, mepc
-    lw      t1, 0(t0)    # 从 mepc 处加载出错指令
+    csrr    t0, mepc          # t0 = faulting instruction 地址
+    lw      t1, 0(t0)         # t1 = faulting 指令
 
-    # --- 增加 lw 指令检查 ---
-    andi    t4, t1, 0x7F         # 提取指令最低 7 位 (opcode 字段)
-    li      t5, 0x03             # lw 指令的 opcode 应为 0x03
-    bne     t4, t5, fail         #   若不匹配则跳转至 fail
+    # 检查 opcode 字段：指令最低 7 位必须为 0x03 (load 指令)
+    andi    t2, t1, 0x7F
+    li      t3, 0x03
+    bne     t2, t3, _trap_fail
 
-    srai    t6, t1, 12           # 右移 12 位提取 funct3 字段
-    andi    t6, t6, 0x7          # 提取最低 3 位
-    li      t5, 2                # lw 指令的 funct3 应为 2（二进制 010）
-    bne     t6, t5, fail         # 若不匹配则跳转至 fail
-    # --- 检查通过，继续处理 ---
+    # 检查 funct3 字段：指令位 [14:12] 必须为 0x02 (lw 的 funct3 为 010)
+    srli    t2, t1, 12        # 将指令右移 12 位
+    andi    t2, t2, 0x7       # 提取低 3 位（即 funct3）
+    li      t3, 0x02
+    bne     t2, t3, _trap_fail
 
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F  
-    csrr    t3, mtval  
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
+    # 提取 lw 指令的目标寄存器（rd）：位 [11:7]
+    srli    t2, t1, 7         # 将指令右移 7 位
+    andi    t2, t2, 0x1F      # 提取 5 位 rd 编号
+
+    # 执行 misaligned load 修正
+    csrr    t3, mtval         # t3 = 出错的内存地址（mtval 存放出错地址）
+
+    # 从出错地址处连续读取 4 字节（小端序）组合成一个 32 位字
+    lbu     t4, 0(t3)         # 读取第 0 字节
+    lbu     t5, 1(t3)         # 读取第 1 字节
     slli    t5, t5, 8
     or      t4, t4, t5
-    lbu     t5, 2(t3)
+
+    lbu     t5, 2(t3)         # 读取第 2 字节
     slli    t5, t5, 16
     or      t4, t4, t5
-    lbu     t5, 3(t3)
+
+    lbu     t5, 3(t3)         # 读取第 3 字节
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    # 将组合后的 32 位字写回到保存的目标寄存器槽中
+    slli    t2, t2, 2         # rd 寄存器编号 * 4 (每个寄存器 4 字节)
+    add     t2, sp, t2        # t2 = 保存的 x[rd] 在栈中的地址
+    sw      t4, 0(t2)         # 写入修正后的值
 
+    # 修改 mepc（增加 4），跳过已修正的 lw 指令
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
-# 处理检查失败的情况
-fail:
-    j       terminate
-
-# 5) Handle misaligned store (sw)
+# 5) 处理 misaligned store（sw）异常
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)   
+    lw      t1, 0(t0)
 
     srli    t2, t1, 20
-    andi    t2, t2, 0x1F  
+    andi    t2, t2, 0x1F
 
-    csrr    t3, mtval  
+    csrr    t3, mtval
 
     slli    t4, t2, 2
     add     t4, sp, t4
-    lw      t5, 0(t4)   
+    lw      t5, 0(t4)
 
     sb      t5, 0(t3)
     srli    t5, t5, 8
@@ -249,7 +258,7 @@ handle_misaligned_store:
 
     j       restore_registers
 
-# 6) Restore registers and return
+# 6) 恢复所有寄存器并返回
 restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
@@ -285,8 +294,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
-
 
 
 
