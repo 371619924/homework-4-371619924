@@ -305,11 +305,6 @@ restore_registers:
     csrrw   sp, mscratch, sp
     mret
 
-# 7) 错误处理：对于不满足条件的异常，直接终止或进行异常退出处理
-terminate:
-    # 此处可添加记录错误、输出信息等错误处理逻辑
-    j       terminate
-
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
