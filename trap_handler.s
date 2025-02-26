@@ -149,6 +149,10 @@ __mtrap:
     li t1, 0x80000000    # Mask for highest bit
     and t2, t0, t1
     bnez t2, go_terminate  # If it's an interrupt, go to terminate
+
+    # ---- 新增：先检查 mcause == 0 (指令取址不对齐) ----
+    li t1, 0
+    beq t0, t1, go_terminate   # 如果是 instruction fetch misalignment，直接终止
     
     # Check if the exception is a misaligned load address (cause = 4)
     li t2, 0x7FFFFFFF       # Load mask to clear highest bit
@@ -160,7 +164,9 @@ __mtrap:
     
     csrr t4, mtval
     csrr t5, mepc
-    beq  t4, t5, go_terminate
+    bltu t4, t5, go_terminate   # mtval < mepc => 不是数据访问，终止
+    addi t6, t5, 2
+    bltu t6, t4, go_terminate   # mtval > mepc+2 => 不是数据访问，终止
     
     
     # Get the instruction that caused the exception
