@@ -107,13 +107,13 @@ __mtrap:
     # Swap sp and mscratch to get a kernel stack
     csrrw sp, mscratch, sp
     
-    # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
+    # Allocate space on stack for all registers
     addi sp, sp, -128
     
     # Save all registers to the stack
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)  # Save the original user stack pointer
+    sw x2, 8(sp)
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -150,12 +150,26 @@ __mtrap:
     and t2, t0, t1
     bnez t2, go_terminate  # If it's an interrupt, go to terminate
     
-    # Check if the exception is a misaligned load address (cause = 4)
+    # Get the exception code (clear the highest bit)
     li t2, 0x7FFFFFFF       # Load mask to clear highest bit
     and t0, t0, t2          # Clear the highest bit to get the exception code
+    
+    # Check for misaligned instruction address (cause = 0) or instruction access fault (cause = 1)
+    li t1, 0                # Misaligned instruction address exception code
+    beq t0, t1, handle_instruction_fault
+    
+    li t1, 1                # Instruction access fault exception code
+    beq t0, t1, handle_instruction_fault
+    
+    # Check for load access fault (cause = 5)
+    li t1, 5                # Load access fault exception code
+    beq t0, t1, handle_instruction_fault
+    
+    # Check if the exception is a misaligned load address (cause = 4)
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
     
+    # Handle misaligned load word
     # Get the instruction that caused the exception
     csrr t0, mepc           # t0 = address of the instruction
     lw t1, 0(t0)            # t1 = instruction
@@ -199,7 +213,7 @@ __mtrap:
     
     # Now t5 contains the correctly loaded word
     # Calculate the address in the stack where the destination register is saved
-    slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
+    slli t6, t3, 2          # t6 = rd * 4
     add t6, t6, sp          # t6 = address of rd in the stack
     
     # Store the loaded value to the destination register's saved location
@@ -210,8 +224,22 @@ __mtrap:
     addi t0, t0, 4
     csrw mepc, t0
     
-    # Restore all registers from the stack
+    # Restore all registers and return
+    j restore_regs_and_return
+
+handle_instruction_fault:
+    # For instruction faults, skip the offending instruction
+    # by incrementing mepc by 4 (size of an instruction)
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+    
+    # Fall through to restore_regs_and_return
+
+restore_regs_and_return:
+    # Restore all registers from the stack (except x0 which is hardwired to 0, and x2 which is sp)
     lw x1, 4(sp)
+    # Skip restoring x2 (sp) as we'll restore it via csrrw later
     lw x3, 12(sp)
     lw x4, 16(sp)
     lw x5, 20(sp)
@@ -254,7 +282,6 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-	
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
