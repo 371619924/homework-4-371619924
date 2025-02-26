@@ -107,13 +107,13 @@ __mtrap:
     # Swap sp and mscratch to get a kernel stack
     csrrw sp, mscratch, sp
     
-    # Allocate space on stack for all registers
+    # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
     addi sp, sp, -128
     
     # Save all registers to the stack
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)
+    sw x2, 8(sp)  # Save the original user stack pointer
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -144,60 +144,28 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
     
-    # Check mcause to determine exception type
+    # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
     csrr t0, mcause
-    
-    # Check if it's an interrupt (highest bit set)
-    li t1, 0x80000000
+    li t1, 0x80000000    # Mask for highest bit
     and t2, t0, t1
-    bnez t2, go_terminate   # If it's an interrupt, go to terminate
-    
-    # Get the exception code (clear the highest bit)
-    li t2, 0x7FFFFFFF
-    and t0, t0, t2
-    
-    # Check for misaligned instruction address (cause = 0)
-    li t1, 0
-    beq t0, t1, handle_instruction_misalign
-    
-    # Check for instruction access fault (cause = 1)
-    li t1, 1
-    beq t0, t1, handle_instruction_fault
+    bnez t2, go_terminate  # If it's an interrupt, go to terminate
     
     # Check if the exception is a misaligned load address (cause = 4)
-    li t1, 4
-    beq t0, t1, handle_misaligned_load
-    
-    # For any other exception, just terminate
-    j go_terminate
+    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
+    and t0, t0, t2          # Clear the highest bit to get the exception code
+    li t1, 4                # Misaligned load address exception code
+    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
 
-handle_instruction_misalign:
-handle_instruction_fault:
-    # For instruction faults, get the next aligned address after mtval
-    csrr t0, mtval
-    addi t0, t0, 3          # Add 3 to round up to next multiple of 4
-    li t1, -4               # Create mask to clear lower 2 bits (0xFFFFFFFC)
-    and t0, t0, t1          # t0 now contains next aligned address
-    
-    # Set mepc to this aligned address
-    csrw mepc, t0
-    
-    # Restore registers and return
-    j restore_regs_and_return
-    
-handle_misaligned_load:
-    # Get the misaligned address from mtval
+   
+    # 读取 mtval(实际出错地址) 和 mepc(故障指令地址)
     csrr t4, mtval
+    csrr t5, mepc
+    # 如果 mtval == mepc，则说明是指令取址不对齐（或不可读指令区），无需做 lw 0(mepc)
+    beq  t4, t5, go_terminate
     
     # Get the instruction that caused the exception
-    csrr t0, mepc
-    
-    # Safely check if we can read from mepc
-    # Compare mtval with mepc to see if we're trying to execute from a misaligned address
-    beq t0, t4, handle_instruction_misalign
-    
-    # Now we know it's safe to read the instruction
-    lw t1, 0(t0)
+    csrr t0, mepc           # t0 = address of the instruction
+    lw t1, 0(t0)            # t1 = instruction
     
     # Check if the instruction is a load word (lw)
     # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
@@ -219,6 +187,9 @@ handle_misaligned_load:
     and t3, t1, t2          # Extract rd bits
     srli t3, t3, 7          # Shift right to get the register number
     
+    # Get the misaligned address from mtval
+    csrr t4, mtval          # t4 = misaligned address
+    
     # Load the bytes individually and combine them
     lbu t5, 0(t4)           # Load first byte (least significant)
     lbu t6, 1(t4)           # Load second byte
@@ -235,7 +206,7 @@ handle_misaligned_load:
     
     # Now t5 contains the correctly loaded word
     # Calculate the address in the stack where the destination register is saved
-    slli t6, t3, 2          # t6 = rd * 4
+    slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
     add t6, t6, sp          # t6 = address of rd in the stack
     
     # Store the loaded value to the destination register's saved location
@@ -246,9 +217,6 @@ handle_misaligned_load:
     addi t0, t0, 4
     csrw mepc, t0
     
-    # Fall through to restore_regs_and_return
-
-restore_regs_and_return:
     # Restore all registers from the stack
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -293,6 +261,7 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
+
 
 
 # This code is taken from the default VRV system code.  It prints out
