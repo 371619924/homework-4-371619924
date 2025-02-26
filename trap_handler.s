@@ -131,20 +131,21 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-    # Swap SP and mscratch to get kernel stack
+# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-    # Save all registers on the kernel stack
+# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
-    sw      x1,   4(sp)
-    sw      x2,   8(sp)
-    sw      x3,  12(sp)
-    sw      x4,  16(sp)
-    sw      x5,  20(sp)
-    sw      x6,  24(sp)
-    sw      x7,  28(sp)
-    sw      x8,  32(sp)
-    sw      x9,  36(sp)
+    sw      x0, 0(sp)
+    sw      x1, 4(sp)
+    sw      x2, 8(sp)   # Save sp (x2)
+    sw      x3, 12(sp)
+    sw      x4, 16(sp)
+    sw      x5, 20(sp)
+    sw      x6, 24(sp)
+    sw      x7, 28(sp)
+    sw      x8, 32(sp)
+    sw      x9, 36(sp)
     sw      x10, 40(sp)
     sw      x11, 44(sp)
     sw      x12, 48(sp)
@@ -160,103 +161,127 @@ __mtrap:
     sw      x22, 88(sp)
     sw      x23, 92(sp)
     sw      x24, 96(sp)
-    sw      x25,100(sp)
-    sw      x26,104(sp)
-    sw      x27,108(sp)
-    sw      x28,112(sp)
-    sw      x29,116(sp)
-    sw      x30,120(sp)
-    sw      x31,124(sp)
+    sw      x25, 100(sp)
+    sw      x26, 104(sp)
+    sw      x27, 108(sp)
+    sw      x28, 112(sp)
+    sw      x29, 116(sp)
+    sw      x30, 120(sp)
+    sw      x31, 124(sp)
 
-    # Check mcause
+# 3) Check trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 4
+    li      t1, 4    # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6
+    li      t1, 6    # 6 = misaligned store
     beq     t0, t1, handle_misaligned_store
     j       terminate  
 
+# 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)         # t1 = faulting instruction
+    lw      t1, 0(t0)   # Load the instruction that caused the trap
 
-    # 检查是否为 lw 指令
-    # 提取 opcode (指令低7位)
-    andi    t6, t1, 127       # t6 = (t1 & 0x7F), VRV下可用十进制 127
-    li      t5, 3             # lw 类指令的 opcode = 3 (0x03)
-    bne     t6, t5, terminate # 如果 opcode 不为 3，跳转终止
-
-    # 提取 funct3 (指令位 [14:12])
-    srli    t6, t1, 12        # 将 funct3 移到最低3位
-    andi    t6, t6, 7         # t6 = (t6 & 0x7)
-    li      t5, 2             # lw 的 funct3 = 2
-    bne     t6, t5, terminate # 如果 funct3 不为 2，跳转终止
-
-    # 提取 lw 指令的目的寄存器 rd (位 [11:7])
-    srli    t2, t1, 7         # t2 = t1 >> 7，rd位移到最低位
-    andi    t2, t2, 0x1F      # 提取 5 位 rd
-
-    # 读取触发异常的（未对齐）内存地址
+    # Check opcode (bits 6-0) to verify it's a LOAD instruction (0x3)
+    andi    t2, t1, 0x7F
+    li      t3, 0x3     # LOAD opcode = 0x3
+    bne     t2, t3, terminate
+    
+    # Check funct3 (bits 14-12) to verify it's a word load (LW, funct3 = 0x2)
+    srli    t2, t1, 12
+    andi    t2, t2, 0x7
+    li      t3, 0x2     # Word size = 0x2
+    bne     t2, t3, terminate
+    
+    # Extract destination register (rd) from bits 11-7
+    srli    t2, t1, 7
+    andi    t2, t2, 0x1F  
+    
+    # Get misaligned address from mtval
     csrr    t3, mtval  
-
-    # 模拟加载并重构 32 位字 (lw 的操作)
-    lbu     t4, 0(t3)         # 从未对齐地址加载第1字节
-    lbu     t5, 1(t3)         # 加载第2字节
+   
+    # Load 4 bytes individually and combine them
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
-    lbu     t5, 2(t3)         # 加载第3字节
+
+    lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
-    lbu     t5, 3(t3)         # 加载第4字节
+
+    lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
-
-    # 将重构的字存入原 lw 指令的目的寄存器中
-    slli    t2, t2, 2         # 目的寄存器在保存时占 4 字节，计算偏移量 (rd * 4)
-    add     t2, sp, t2        # 得到保存的寄存器在栈中的地址
-    sw      t4, 0(t2)         # 将加载的字写入保存的寄存器槽
-
-    # 更新 mepc, 跳过 faulting lw 指令 (32位指令)
+    
+    # Store result to correct register position in saved register area
+    slli    t2, t2, 2
+    add     t2, sp, t2
+    sw      t4, 0(t2)
+    
+    # Increment mepc to skip the trapped instruction
+    csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
+
     j       restore_registers
 
+
+# 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)
+    lw      t1, 0(t0)   # Load the instruction that caused the trap
 
-    # Extract rs2
+    # Check opcode (bits 6-0) to verify it's a STORE instruction (0x23)
+    andi    t2, t1, 0x7F
+    li      t3, 0x23    # STORE opcode = 0x23
+    bne     t2, t3, terminate
+    
+    # Check funct3 (bits 14-12) to verify it's a word store (SW, funct3 = 0x2)
+    srli    t2, t1, 12
+    andi    t2, t2, 0x7
+    li      t3, 0x2     # Word size = 0x2
+    bne     t2, t3, terminate
+    
+    # Extract source register (rs2) from bits 24-20
     srli    t2, t1, 20
     andi    t2, t2, 0x1F  
-
-    # Read misaligned address
+    
+    # Get misaligned address from mtval
     csrr    t3, mtval  
-
-    # Load rs2 value from stack
+    
+    # Get value to store from source register
     slli    t4, t2, 2
     add     t4, sp, t4
-    lw      t5, 0(t4)
-
-    # Store word in misaligned address
-    sh      t5, 0(t3)
-    srli    t5, t5, 16
-    sh      t5, 2(t3)
-
-    # Advance mepc
+    lw      t5, 0(t4)   
+    
+    # Store 4 bytes individually
+    sb      t5, 0(t3)
+    srli    t5, t5, 8
+    sb      t5, 1(t3)
+    srli    t5, t5, 8
+    sb      t5, 2(t3)
+    srli    t5, t5, 8
+    sb      t5, 3(t3)
+    
+    # Increment mepc to skip the trapped instruction
+    csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
+
     j       restore_registers
 
+
+# 6) Restore registers and return
 restore_registers:
-    lw      x1,   4(sp)
-    lw      x2,   8(sp)
-    lw      x3,  12(sp)
-    lw      x4,  16(sp)
-    lw      x5,  20(sp)
-    lw      x6,  24(sp)
-    lw      x7,  28(sp)
-    lw      x8,  32(sp)
-    lw      x9,  36(sp)
+    lw      x1, 4(sp)
+    lw      x3, 12(sp)
+    lw      x4, 16(sp)
+    lw      x5, 20(sp)
+    lw      x6, 24(sp)
+    lw      x7, 28(sp)
+    lw      x8, 32(sp)
+    lw      x9, 36(sp)
     lw      x10, 40(sp)
     lw      x11, 44(sp)
     lw      x12, 48(sp)
@@ -272,16 +297,15 @@ restore_registers:
     lw      x22, 88(sp)
     lw      x23, 92(sp)
     lw      x24, 96(sp)
-    lw      x25,100(sp)
-    lw      x26,104(sp)
-    lw      x27,108(sp)
-    lw      x28,112(sp)
-    lw      x29,116(sp)
-    lw      x30,120(sp)
-    lw      x31,124(sp)
-    addi    sp, sp, 128
+    lw      x25, 100(sp)
+    lw      x26, 104(sp)
+    lw      x27, 108(sp)
+    lw      x28, 112(sp)
+    lw      x29, 116(sp)
+    lw      x30, 120(sp)
+    lw      x31, 124(sp)
 
-    # Restore sp
+    addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
 
