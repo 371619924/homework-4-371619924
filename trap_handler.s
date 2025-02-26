@@ -129,19 +129,19 @@ __mstart:
 ### You will need to write your own trap handler functionality here.
 # Trap handler for misaligned load word exceptions
 ### Trap handler
-#-------------------------------------------------------
-# mtrap.s  —— 仅处理 misaligned lw
-#-------------------------------------------------------
+
+        .section .text
+        .global __mtrap
 
 __mtrap:
-    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # 1) 换栈：把当前 sp 和 mscratch 互换，避免破坏用户栈
     csrrw   sp, mscratch, sp
 
-    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # 2) 保存所有寄存器到“内核栈”（此处假定128字节空间：32×4字节）
     addi    sp, sp, -128
     sw      x0,  0(sp)
     sw      x1,  4(sp)
-    sw      x2,  8(sp)    # Save sp (x2)
+    sw      x2,  8(sp)    # 保存 sp (x2)
     sw      x3,  12(sp)
     sw      x4,  16(sp)
     sw      x5,  20(sp)
@@ -172,84 +172,88 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-    # 3) Check trap cause (mcause)
+    # 3) 检查 trap cause (mcause)
     csrr    t0, mcause
-    li      t1, 0x7FFFFFFF    # Mask to clear interrupt bit (bit 31)
-    and     t0, t0, t1        # Clear the interrupt bit
+    li      t1, 0x7FFFFFFF    # 用于屏蔽可能的interrupt位 (bit 31)
+    and     t0, t0, t1        # 去掉最高位（中断标志）
+
     li      t1, 4             # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
 
-    # 如果不是 misaligned load，直接终止（或报错）
+    # 如果不是 misaligned load，直接终止/报错
     j       terminate
 
-#-------------------------------------------------------
-# 4) Handle misaligned load (lw)
-#-------------------------------------------------------
+#------------------------------------------------------------
+# 处理 misaligned lw
+#------------------------------------------------------------
 handle_misaligned_load:
     # 读取 faulting 指令
     csrr    t0, mepc
-    lw      t1, 0(t0)            # faulting instruction
+    lw      t1, 0(t0)         # faulting instruction
 
     # 验证指令是 lw（检查 opcode 和 funct3）
-    andi    t2, t1, 0x7F         # opcode (bits 0..6)
-    li      t3, 0x03             # 'load' opcode = 0x03
-    bne     t2, t3, terminate    # 不是 load 指令就终止
+    # 1) opcode (bits 0..6)
+    andi    t2, t1, 0x7F      # 取出低7位
+    li      t3, 0x03          # 'load' 指令的 opcode = 3
+    bne     t2, t3, terminate # 不是 load 就不处理
 
-    srli    t2, t1, 12           # funct3 (bits 12..14)
+    # 2) funct3 (bits 12..14)
+    srli    t2, t1, 12
     andi    t2, t2, 0x7
-    li      t3, 2                # lw 的 funct3 = 2
-    bne     t2, t3, terminate    # 不是 lw 指令就终止
+    li      t3, 2             # lw 的 funct3 = 2
+    bne     t2, t3, terminate # 不是 lw 就不处理
 
-    # 取出目的寄存器 rd (bits 7..11)
+    # 取出目标寄存器 rd (bits 7..11)
     srli    t2, t1, 7
-    andi    t2, t2, 0x1F
+    andi    t2, t2, 0x1F      # 只保留5位
 
     # 取出 misaligned 地址 (mtval)
     csrr    t3, mtval
 
-    # 分别取 4 个字节再拼装
-    lbu     t4, 0(t3)          # 第 1 个 byte
-    lbu     t5, 1(t3)          # 第 2 个 byte
+    # 按字节依次读取再组合
+    lbu     t4, 0(t3)
+    lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
 
-    lbu     t5, 2(t3)          # 第 3 个 byte
+    lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
 
-    lbu     t5, 3(t3)          # 第 4 个 byte
+    lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
 
-    # 把拼好的值写回到寄存器对应的栈位置
-    slli    t2, t2, 2
+    # 把读出的值写到寄存器对应的栈位置
+    slli    t2, t2, 2         # 乘4得到偏移
     add     t2, sp, t2
     sw      t4, 0(t2)
 
-    # 如果目标寄存器是 x2（sp），还要更新 mscratch
+    # 如果目标寄存器是 x2(sp)，还要更新 mscratch
     srli    t0, t1, 7
     andi    t0, t0, 0x1F
-    li      t6, 2               # x2 = sp
+    li      t6, 2             # x2 = sp
     bne     t0, t6, skip
-    lw      t0, 8(sp)           # 取原先保存的 sp
-    csrw    mscratch, t0        # 更新 mscratch
+    # 如果 rd 是 sp，就更新 mscratch 里的“内核栈”
+    lw      t0, 8(sp)         # 取出原先保存的 sp
+    csrw    mscratch, t0
 skip:
 
-    # 让 mepc 指向下一条指令
+    # 更新 mepc，让它指向下一条指令（跳过当前 faulting lw）
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
-#-------------------------------------------------------
-# 5) （删除了 misaligned store 的处理）
-#    如果遇到 misaligned store，则在前面直接 j terminate
-#-------------------------------------------------------
+#------------------------------------------------------------
+# 注意：我们删除了对 misaligned store (mcause=6) 的修正
+#       如果碰到 mcause=6, 直接 j terminate (见上面判断)
+#------------------------------------------------------------
 
-#-------------------------------------------------------
-# 6) Restore registers and return
-#-------------------------------------------------------
+#------------------------------------------------------------
+# 恢复寄存器并返回
+#------------------------------------------------------------
 restore_registers:
     lw      x1,  4(sp)
     lw      x3,  12(sp)
@@ -283,9 +287,9 @@ restore_registers:
     lw      x31, 124(sp)
 
     addi    sp, sp, 128
+    # 把 sp 和 mscratch 再换回来
     csrrw   sp, mscratch, sp
     mret
-
 
 
 # This code is taken from the default VRV system code. It prints out
