@@ -177,31 +177,46 @@ __mtrap:
     j       terminate  
 
 handle_misaligned_load:
-    csrr    t0, mepc
-    lw      t1, 0(t0)
+    csrr    t0, mepc          # 获取触发异常的指令地址
+    lw      t1, 0(t0)         # t1 = faulting instruction
 
-    # Extract rd
-    srli    t2, t1, 7
-    andi    t2, t2, 0x1F  
+    # 检查指令是否为 lw 指令：
+    # 提取 opcode (指令低7位)
+    andi    t7, t1, 0x7F      # t7 = opcode
+    li      t8, 0x03          # lw 类指令的 opcode 为 0000011 (0x03)
+    bne     t7, t8, terminate # 如果 opcode 不匹配，跳转到 terminate
 
-    # Read misaligned address
+    # 提取 funct3 (指令位 [14:12])
+    srli    t7, t1, 12        # 将 funct3 位移到最低位
+    andi    t7, t7, 0x7       # t7 = funct3
+    li      t8, 0x2           # lw 的 funct3 为 010b (0x2)
+    bne     t7, t8, terminate # 如果 funct3 不匹配，跳转到 terminate
+
+    # 提取 lw 指令的目的寄存器 rd (位 [11:7])
+    srli    t2, t1, 7         # t2 = t1 >> 7，rd位移到最低位
+    andi    t2, t2, 0x1F      # 提取 5 位 rd
+
+    # 读取触发异常的（未对齐）内存地址
     csrr    t3, mtval  
 
-    # Load and reconstruct word
-    lbu     t4, 0(t3)
-    lbu     t5, 1(t3)
+    # 模拟加载并重构 32 位字 (lw 的操作)
+    lbu     t4, 0(t3)         # 从未对齐地址加载第1字节
+    lbu     t5, 1(t3)         # 加载第2字节
     slli    t5, t5, 8
     or      t4, t4, t5
-    lhu     t5, 2(t3)
+    lbu     t5, 2(t3)         # 加载第3字节
     slli    t5, t5, 16
     or      t4, t4, t5
+    lbu     t5, 3(t3)         # 加载第4字节
+    slli    t5, t5, 24
+    or      t4, t4, t5
 
-    # Store result into rd
-    slli    t2, t2, 2
-    add     t2, sp, t2
-    sw      t4, 0(t2)
+    # 将重构的字存入原 lw 指令的目的寄存器中
+    slli    t2, t2, 2         # 目的寄存器在保存时占 4 字节，计算偏移量 (rd * 4)
+    add     t2, sp, t2        # 得到保存的寄存器在栈中的地址
+    sw      t4, 0(t2)         # 将加载的字写入保存的寄存器槽
 
-    # Advance mepc
+    # 更新 mepc, 跳过 faulting lw 指令 (32位指令)
     addi    t0, t0, 4
     csrw    mepc, t0
     j       restore_registers
