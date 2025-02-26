@@ -131,10 +131,10 @@ __mstart:
 ### Trap handler
 
 __mtrap:
-# 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
+    # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
-# 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
+    # 2) Save all registers to kernel stack (128 bytes = 32 registers * 4 bytes)
     addi    sp, sp, -128
     sw      x0, 0(sp)
     sw      x1, 4(sp)
@@ -169,7 +169,7 @@ __mtrap:
     sw      x30, 120(sp)
     sw      x31, 124(sp)
 
-# 3) Check trap cause (mcause)
+    # 3) Check trap cause (mcause)
     csrr    t0, mcause
     li      t1, 4    # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
@@ -180,82 +180,61 @@ __mtrap:
 # 4) Handle misaligned load (lw)
 handle_misaligned_load:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # Load the instruction that caused the trap
+    lw      t1, 0(t0)    # 从 mepc 处加载出错指令
 
-    # Check opcode (bits 6-0) to verify it's a LOAD instruction (0x3)
-    andi    t2, t1, 0x7F
-    li      t3, 0x3     # LOAD opcode = 0x3
-    bne     t2, t3, terminate
-    
-    # Check funct3 (bits 14-12) to verify it's a word load (LW, funct3 = 0x2)
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 0x2     # Word size = 0x2
-    bne     t2, t3, terminate
-    
-    # Extract destination register (rd) from bits 11-7
+    # --- 增加 lw 指令检查 ---
+    andi    t4, t1, 0x7F         # 提取指令最低 7 位 (opcode 字段)
+    li      t5, 0x03             # lw 指令的 opcode 应为 0x03
+    bne     t4, t5, fail         #   若不匹配则跳转至 fail
+
+    srai    t6, t1, 12           # 右移 12 位提取 funct3 字段
+    andi    t6, t6, 0x7          # 提取最低 3 位
+    li      t5, 2                # lw 指令的 funct3 应为 2（二进制 010）
+    bne     t6, t5, fail         # 若不匹配则跳转至 fail
+    # --- 检查通过，继续处理 ---
+
     srli    t2, t1, 7
     andi    t2, t2, 0x1F  
-    
-    # Get misaligned address from mtval
     csrr    t3, mtval  
-   
-    # Load 4 bytes individually and combine them
     lbu     t4, 0(t3)
     lbu     t5, 1(t3)
     slli    t5, t5, 8
     or      t4, t4, t5
-
     lbu     t5, 2(t3)
     slli    t5, t5, 16
     or      t4, t4, t5
-
     lbu     t5, 3(t3)
     slli    t5, t5, 24
     or      t4, t4, t5
-    
-    # Store result to correct register position in saved register area
+
     slli    t2, t2, 2
     add     t2, sp, t2
     sw      t4, 0(t2)
-    
-    # Increment mepc to skip the trapped instruction
+
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
 
+# 处理检查失败的情况
+fail:
+    j       terminate
 
 # 5) Handle misaligned store (sw)
 handle_misaligned_store:
     csrr    t0, mepc
-    lw      t1, 0(t0)   # Load the instruction that caused the trap
+    lw      t1, 0(t0)   
 
-    # Check opcode (bits 6-0) to verify it's a STORE instruction (0x23)
-    andi    t2, t1, 0x7F
-    li      t3, 0x23    # STORE opcode = 0x23
-    bne     t2, t3, terminate
-    
-    # Check funct3 (bits 14-12) to verify it's a word store (SW, funct3 = 0x2)
-    srli    t2, t1, 12
-    andi    t2, t2, 0x7
-    li      t3, 0x2     # Word size = 0x2
-    bne     t2, t3, terminate
-    
-    # Extract source register (rs2) from bits 24-20
     srli    t2, t1, 20
     andi    t2, t2, 0x1F  
-    
-    # Get misaligned address from mtval
+
     csrr    t3, mtval  
-    
-    # Get value to store from source register
+
     slli    t4, t2, 2
     add     t4, sp, t4
     lw      t5, 0(t4)   
-    
-    # Store 4 bytes individually
+
     sb      t5, 0(t3)
     srli    t5, t5, 8
     sb      t5, 1(t3)
@@ -263,14 +242,12 @@ handle_misaligned_store:
     sb      t5, 2(t3)
     srli    t5, t5, 8
     sb      t5, 3(t3)
-    
-    # Increment mepc to skip the trapped instruction
+
     csrr    t0, mepc
     addi    t0, t0, 4
     csrw    mepc, t0
 
     j       restore_registers
-
 
 # 6) Restore registers and return
 restore_registers:
@@ -308,7 +285,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 
 
