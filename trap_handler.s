@@ -107,12 +107,16 @@ __mstart:
 
 
 __mtrap:
-    # 1) 交换 sp 和 mscratch，使用内核栈
+    # 交换 sp 和 mscratch，切换到内核栈
     csrrw sp, mscratch, sp
-
-    # 2) 申请 128 字节栈空间，保存所有寄存器
+    
+    # 分配栈空间保存所有寄存器（32 * 4 bytes = 128 bytes）
     addi sp, sp, -128
+
+    # 保存所有寄存器到栈
+    sw x0, 0(sp)
     sw x1, 4(sp)
+    sw x2, 8(sp)  # 原始用户栈指针
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -142,73 +146,79 @@ __mtrap:
     sw x29, 116(sp)
     sw x30, 120(sp)
     sw x31, 124(sp)
-
-    # 3) 读取 mcause
+    
+    # 获取 mcause，检查是否是异常还是中断
     csrr t0, mcause
-
-    # 4) 检查最高位，如果是中断，则跳转到 terminate
-    li t1, 0x80000000   # 最高位掩码
+    li t1, 0x80000000    # 最高位掩码
     and t2, t0, t1
-    bnez t2, go_terminate
+    bnez t2, go_terminate  # 如果是中断，直接终止
 
-    # 5) 读取 mtval 和 mepc，检查是否是非法跳转
-    csrr t2, mtval
-    csrr t3, mepc
+    # 取 mcause 低 31 位
+    li t2, 0x7FFFFFFF  # 掩码清除最高位
+    and t0, t0, t2      # 取得异常代码
 
-    # 如果 mtval == 0x00000000 或者 mtval == mepc，说明指令跳转到非法地址，终止
-    beqz t2, go_terminate
-    beq t2, t3, go_terminate
+    # 检查是否是取指令 misaligned
+    li t1, 0x0          # 取指令地址未对齐异常代码
+    beq t0, t1, go_terminate  # 如果是取指令异常，终止
 
-    # 6) 检查是否是 Misaligned Load (mcause = 4)
-    li t1, 4
-    bne t0, t1, go_terminate
+    # 检查是否是 load misaligned
+    li t1, 4            # Load Address Misaligned 异常代码
+    bne t0, t1, go_terminate  # 不是 load misaligned 直接终止
 
-    # 7) 读取导致异常的指令
-    lw t1, 0(t3)   # t3 = mepc, 取出异常指令
+    # 通过 mepc 和 mtval 区分是取指令异常还是 lw
+    csrr t3, mepc      # 获取 mepc（导致异常的 PC）
+    csrr t4, mtval     # 获取 mtval（发生错误的地址）
+    beq t3, t4, go_terminate  # 如果 mepc == mtval，说明是取指令异常，终止
 
-    # 8) 确保指令是 lw
-    li t2, 0x7F    # 提取 opcode (bits 0-6)
-    and t4, t1, t2
-    li t2, 0x03    # lw 的 opcode (0000011)
-    bne t4, t2, go_terminate
+    # 读取导致异常的指令
+    lw t1, 0(t3)       # t1 = 指令值
 
-    li t2, 0x7000  # 提取 funct3 (bits 12-14)
-    and t4, t1, t2
-    li t2, 0x2000  # lw 的 funct3 (010)
-    bne t4, t2, go_terminate
+    # 检查是否是 lw 指令
+    li t2, 0x7F        # Opcode 掩码（bits 0-6）
+    and t3, t1, t2     # 提取 opcode
+    li t2, 0x03        # Load opcode（0000011）
+    bne t3, t2, go_terminate  # 不是 load 指令，终止
 
-    # 9) 提取 rd (bits 7-11)
-    li t2, 0xF80
-    and t4, t1, t2
-    srli t4, t4, 7
+    li t2, 0x7000      # Funct3 掩码（bits 12-14）
+    and t3, t1, t2     # 提取 funct3
+    li t2, 0x2000      # Funct3 = 010（lw）
+    bne t3, t2, go_terminate  # 不是 lw（可能是 lb, lh 等），终止
 
-    # 10) 读取 misaligned 地址
-    csrr t5, mtval
+    # 提取目的寄存器（rd），bits 7-11
+    li t2, 0xF80       # rd 掩码
+    and t3, t1, t2
+    srli t3, t3, 7     # 右移得到寄存器编号
 
-    # 11) 逐字节读取数据
-    lbu t6, 0(t5)
-    lbu t7, 1(t5)
-    slli t7, t7, 8
-    or t6, t6, t7
+    # 获取未对齐的加载地址
+    csrr t4, mtval     # t4 = 触发异常的地址
 
-    lbu t7, 2(t5)
-    slli t7, t7, 16
-    or t6, t6, t7
+    # 逐字节读取并拼接为 32-bit
+    lbu t5, 0(t4)      # 低 8 位
+    lbu t6, 1(t4)      # 次低 8 位
+    slli t6, t6, 8
+    or t5, t5, t6
 
-    lbu t7, 3(t5)
-    slli t7, t7, 24
-    or t6, t6, t7
+    lbu t6, 2(t4)      # 次高 8 位
+    slli t6, t6, 16
+    or t5, t5, t6
 
-    # 12) 存储到 rd
-    slli t7, t4, 2
-    add t7, t7, sp
-    sw t6, 0(t7)
+    lbu t6, 3(t4)      # 高 8 位
+    slli t6, t6, 24
+    or t5, t5, t6
 
-    # 13) 跳过错误指令
-    addi t3, t3, 4
-    csrw mepc, t3
+    # 计算 rd 在栈中的位置
+    slli t6, t3, 2     # t6 = rd * 4
+    add t6, t6, sp     # t6 = 栈中 rd 位置
 
-    # 14) 恢复寄存器
+    # 存入 rd 在栈中的值
+    sw t5, 0(t6)
+
+    # 修正 mepc，跳过导致异常的指令
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+
+    # 恢复所有寄存器
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -240,17 +250,19 @@ __mtrap:
     lw x30, 120(sp)
     lw x31, 124(sp)
 
-    # 15) 释放栈空间并恢复 sp
+    # 释放栈空间并恢复用户栈
     addi sp, sp, 128
     csrrw sp, mscratch, sp
 
-    # 16) 返回用户模式
+    # 从 trap 返回
     mret
 
 go_terminate:
+    # 恢复栈并终止
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
+
 
 
 
