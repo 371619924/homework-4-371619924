@@ -131,7 +131,7 @@ __mstart:
 ### Trap handler
 
 
-    __mtrap:
+__mtrap:
 # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
 
@@ -176,8 +176,6 @@ __mstart:
     and     t0, t0, t1      # Clear the interrupt bit
     li      t1, 4    # 4 = misaligned load
     beq     t0, t1, handle_misaligned_load
-    li      t1, 6    # 6 = misaligned store
-    beq     t0, t1, handle_misaligned_store
     j       terminate  
 
 # 4) Handle misaligned load (lw)
@@ -237,8 +235,7 @@ skip:
 
     j       restore_registers
 
-
-# 6) Restore registers and return
+# 5) Restore registers and return
 restore_registers:
     lw      x1, 4(sp)
     lw      x3, 12(sp)
@@ -274,8 +271,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
-    
 
 # This code is taken from the default VRV system code. It prints out
 # a message indicating the cause of an unhandled exception. We are
