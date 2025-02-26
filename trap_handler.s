@@ -133,9 +133,6 @@ __mstart:
 # mtrap.s  —— 仅处理 misaligned lw
 #-------------------------------------------------------
 
-        .section .text
-        .global __mtrap
-
 __mtrap:
     # 1) Swap stack pointer (sp) with mscratch, so kernel uses its own stack
     csrrw   sp, mscratch, sp
