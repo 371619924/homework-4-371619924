@@ -220,8 +220,10 @@ handle_misaligned_load:
     sw      t4, 0(t2)
 
     # Special handling for SP (x2) as destination
-    li      t0, 2
-    bne     t2, t0, skip
+    srli    t0, t1, 7          # Extract rd again (destination register)
+    andi    t0, t0, 0x1F       # Mask for 5 bits
+    li      t6, 2              # x2 = sp
+    bne     t0, t6, skip
     lw      t0, 8(sp)          # Load original sp value
     csrw    mscratch, t0       # Update mscratch
 skip:
@@ -304,7 +306,6 @@ restore_registers:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     mret
-
 
 
 # This code is taken from the default VRV system code. It prints out
