@@ -117,7 +117,7 @@ __mtrap:
     # 保存所有寄存器到栈中
     sw      x0,   0(sp)
     sw      x1,   4(sp)
-    sw      x2,   8(sp)    # 保存原始用户栈指针
+    sw      x2,   8(sp)
     sw      x3,   12(sp)
     sw      x4,   16(sp)
     sw      x5,   20(sp)
@@ -166,7 +166,7 @@ __mtrap:
     csrr    t0, mepc           # t0 = mepc （出错指令地址）
     beq     t7, t0, go_terminate  # 如果 mtval == mepc，则为取指异常，直接跳转 terminate
 
-    # 否则认为是数据 load 不对齐异常，继续补救处理
+    # 否则认为是 misaligned load 异常，继续补救处理
 
     # 从 mepc 取得引起异常的指令
     csrr    t0, mepc           # t0 = 出错指令地址
@@ -266,6 +266,7 @@ go_terminate:
     addi    sp, sp, 128
     csrrw   sp, mscratch, sp
     j       terminate
+
 
 
 
