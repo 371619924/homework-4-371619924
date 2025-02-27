@@ -160,21 +160,26 @@ __mtrap:
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, do_terminate  # If not a misaligned load address, go to terminate
     
-    # At this point we have a misaligned load address exception
-    # We need to distinguish between instruction fetch misalignment and data load misalignment
+    # Following the hint: Compare mtval and mepc to determine if it's an instruction fetch misalignment
+    csrr t0, mepc           # t0 = address of the instruction
+    csrr t1, mtval          # t1 = misaligned address that caused the exception
     
-    # For instruction fetch misalignment:
-    # - mtval will contain the misaligned jump target
-    # - The instruction at mepc will be a jump instruction (jalr)
+    # Check if mtval is different from mepc
+    # If they're different, it's likely an instruction fetch misalignment
+    # (mepc points to the jump instruction, mtval points to the jump target)
+    beq t0, t1, check_data_misalign  # If they're the same, check for data misalignment
+    
+    # If mtval and mepc are different, and mtval is not aligned (has lower bits set),
+    # it's an instruction fetch misalignment (like jr a0 with a0=3)
+    andi t2, t1, 0x3        # Check if lowest 2 bits are set (not aligned to 4 bytes)
+    bnez t2, do_terminate   # If misaligned, it's an instruction fetch error, so terminate
+    
+check_data_misalign:
+    # Now we know it's probably a data misalignment
+    # Get the instruction that caused the exception
     csrr t0, mepc           # t0 = address of the instruction
     lw t1, 0(t0)            # t1 = instruction
     
-    # Check if it's a jalr instruction (opcode 0x67)
-    andi t2, t1, 0x7F       # Extract opcode (lowest 7 bits)
-    li t3, 0x67             # JALR opcode
-    beq t2, t3, do_terminate  # If it's a jalr (jr), go to terminate
-    
-    # If we get here, it's a data misalignment, not an instruction fetch misalignment
     # Check if the instruction is a load word (lw)
     # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
     # Opcode for loads is 0000011 (bits 0-6)
@@ -270,8 +275,9 @@ do_terminate:
     csrrw sp, mscratch, sp
     j terminate
 
-
     
+
+
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
