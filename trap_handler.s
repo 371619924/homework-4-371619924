@@ -257,10 +257,6 @@ restore_registers:
     mret
 
 
-go_terminate:
-    addi sp, sp, 128
-    csrrw sp, mscratch, sp
-    j terminate
 
 
 # This code is taken from the default VRV system code.  It prints out
