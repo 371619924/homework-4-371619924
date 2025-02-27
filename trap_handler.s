@@ -114,6 +114,7 @@ __mtrap:
     addi sp, sp, -128
     
     # Save all registers to the stack
+    sw x0, 0(sp)
     sw x1, 4(sp)
     sw x2, 8(sp)  # Save the original user stack pointer
     sw x3, 12(sp)
@@ -152,47 +153,14 @@ __mtrap:
     and t2, t0, t1
     bnez t2, go_terminate  # If it's an interrupt, go to terminate
     
-    # Extract exception code by clearing highest bit
-    li t2, 0x7FFFFFFF
-    and t0, t0, t2
-    
-    # Check if the exception is a misaligned instruction fetch (mcause = 0)
-    li t1, 0              # Misaligned instruction fetch cause code
-    beq t0, t1, go_terminate  # If it's a misaligned instruction fetch, terminate
-
-    # Check if the exception is a misaligned load address (mcause = 4)
+    # Check if the exception is a misaligned load address (cause = 4)
+    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
+    and t0, t0, t2          # Clear the highest bit to get the exception code
     li t1, 4                # Misaligned load address exception code
-    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    bne t0, t1, check_fetch_exception  # If not a misaligned load address, check fetch exception
     
-    # Get the instruction that caused the exception
-    csrr t0, mepc           # t0 = address of the instruction
-    csrr t4, mtval          # t4 = misaligned address
-
-    # Check if the misaligned load is caused by instruction fetch
-    bne t4, t0, not_instruction_fetch  # If mtval != mepc, it's a data load, continue handling
-
-    j go_terminate          # Otherwise, terminate (misaligned instruction fetch)
-
-not_instruction_fetch:
-    lw t1, 0(t0)            # Load the instruction
-
-    # Check if the instruction is a load word (lw)
-    li t2, 0x7F             # Mask for opcode (bits 0-6)
-    and t3, t1, t2          # Extract opcode
-    li t2, 0x03             # Load opcode (0000011)
-    bne t3, t2, go_terminate  # If not a load instruction, terminate
-    
-    li t2, 0x7000           # Mask for funct3 (bits 12-14)
-    and t3, t1, t2          # Extract funct3
-    li t2, 0x2000           # funct3 for lw (010)
-    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
-    
-    # Extract the destination register (rd) from the instruction (bits 7-11)
-    li t2, 0xF80            # Mask for rd (bits 7-11)
-    and t3, t1, t2          # Extract rd bits
-    srli t3, t3, 7          # Shift right to get the register number
-    
-    # Load the misaligned address from mtval
+handle_misaligned_load:
+    # Get the misaligned address from mtval
     csrr t4, mtval          # t4 = misaligned address
     
     # Load the bytes individually and combine them
@@ -209,7 +177,15 @@ not_instruction_fetch:
     slli t6, t6, 24         # Shift left by 24 bits
     or t5, t5, t6           # Combine
     
-    # Now t5 contains the correctly loaded word
+    # Get destination register
+    csrr t0, mepc
+    lw t1, 0(t0)            # Load instruction (safe now)
+    
+    # Extract the destination register (rd) from the instruction (bits 7-11)
+    li t2, 0xF80            # Mask for rd (bits 7-11)
+    and t3, t1, t2          # Extract rd bits
+    srli t3, t3, 7          # Shift right to get the register number
+    
     # Calculate the address in the stack where the destination register is saved
     slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
     add t6, t6, sp          # t6 = address of rd in the stack
@@ -222,10 +198,27 @@ not_instruction_fetch:
     addi t0, t0, 4
     csrw mepc, t0
     
-    # Restore all registers from the stack
+    # Restore registers and return
+    j restore_registers
+
+check_fetch_exception:
+    # Check if the misaligned address (mtval) is the same as the instruction fetch address (mepc)
+    csrr t3, mtval
+    csrr t4, mepc
+    beq t3, t4, go_terminate  # If mtval == mepc, terminate since it's an illegal fetch
+    
+    # Otherwise, continue handling misaligned load
+    j handle_misaligned_load
+
+go_terminate:
+    # Restore stack before jumping to terminate
+    addi sp, sp, 128
+    csrrw sp, mscratch, sp
+    j terminate
+
 restore_registers:
+    # Restore all registers from the stack
     lw x1, 4(sp)
-    lw x2, 8(sp)    # 恢复用户态栈指针
     lw x3, 12(sp)
     lw x4, 16(sp)
     lw x5, 20(sp)
@@ -255,13 +248,14 @@ restore_registers:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-
-    # Deallocate stack space and restore user stack
+    
+    # Deallocate stack space and swap back to user stack
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     
     # Return from trap
     mret
+
 
 go_terminate:
     addi sp, sp, 128
