@@ -152,80 +152,29 @@ __mtrap:
     csrr t0, mcause
     li t1, 0x80000000    # Mask for highest bit
     and t2, t0, t1
-    bnez t2, go_terminate  # If it's an interrupt, go to terminate
+    bnez t2, do_terminate  # If it's an interrupt, go to terminate
     
     # Check if the exception is a misaligned load address (cause = 4)
     li t2, 0x7FFFFFFF       # Load mask to clear highest bit
     and t0, t0, t2          # Clear the highest bit to get the exception code
     li t1, 4                # Misaligned load address exception code
-    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    bne t0, t1, do_terminate  # If not a misaligned load address, go to terminate
     
-    # For instruction fetch misalignment (like jr a0 with a0=3), we need to check:
-    # 1. If mtval is misaligned (not a multiple of 4)
-    # 2. If mtval is the address we tried to jump to
-    csrr t0, mtval          # t0 = misaligned address that caused the exception
+    # At this point we have a misaligned load address exception
+    # We need to distinguish between instruction fetch misalignment and data load misalignment
     
-    # Check if mtval is misaligned (not a multiple of 4)
-    andi t1, t0, 0x3        # Check if lowest 2 bits are set (not aligned to 4 bytes)
-    beqz t1, handle_data_misalign # If aligned, treat as normal data misalignment
-    
-    # Check instruction at mepc
-    csrr t1, mepc           # t1 = address of the instruction
-    lw t2, 0(t1)            # t2 = instruction at mepc
-    
-    # Extract opcode (bits 0-6)
-    andi t3, t2, 0x7F       
-    
-    # If opcode is 0x67 (jalr/jr), it's an instruction fetch misalignment
-    li t4, 0x67             # jalr opcode
-    beq t3, t4, go_terminate # If jr/jalr instruction, go to terminate
-    
-    # Otherwise, proceed with regular misaligned load handling
-    
-    # Restore all registers from the stack
-    lw x1, 4(sp)
-    lw x3, 12(sp)
-    lw x4, 16(sp)
-    lw x5, 20(sp)
-    lw x6, 24(sp)
-    lw x7, 28(sp)
-    lw x8, 32(sp)
-    lw x9, 36(sp)
-    lw x10, 40(sp)
-    lw x11, 44(sp)
-    lw x12, 48(sp)
-    lw x13, 52(sp)
-    lw x14, 56(sp)
-    lw x15, 60(sp)
-    lw x16, 64(sp)
-    lw x17, 68(sp)
-    lw x18, 72(sp)
-    lw x19, 76(sp)
-    lw x20, 80(sp)
-    lw x21, 84(sp)
-    lw x22, 88(sp)
-    lw x23, 92(sp)
-    lw x24, 96(sp)
-    lw x25, 100(sp)
-    lw x26, 104(sp)
-    lw x27, 108(sp)
-    lw x28, 112(sp)
-    lw x29, 116(sp)
-    lw x30, 120(sp)
-    lw x31, 124(sp)
-    
-    # Deallocate stack space and swap back to user stack
-    addi sp, sp, 128
-    csrrw sp, mscratch, sp
-    
-    # Return from trap
-    mret
-
-handle_data_misalign:
-    # Get the instruction that caused the exception
+    # For instruction fetch misalignment:
+    # - mtval will contain the misaligned jump target
+    # - The instruction at mepc will be a jump instruction (jalr)
     csrr t0, mepc           # t0 = address of the instruction
     lw t1, 0(t0)            # t1 = instruction
     
+    # Check if it's a jalr instruction (opcode 0x67)
+    andi t2, t1, 0x7F       # Extract opcode (lowest 7 bits)
+    li t3, 0x67             # JALR opcode
+    beq t2, t3, do_terminate  # If it's a jalr (jr), go to terminate
+    
+    # If we get here, it's a data misalignment, not an instruction fetch misalignment
     # Check if the instruction is a load word (lw)
     # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
     # Opcode for loads is 0000011 (bits 0-6)
@@ -234,12 +183,12 @@ handle_data_misalign:
     li t2, 0x7F             # Mask for opcode (bits 0-6)
     and t3, t1, t2          # Extract opcode
     li t2, 0x03             # Load opcode (0000011)
-    bne t3, t2, go_terminate  # If not a load instruction, terminate
+    bne t3, t2, do_terminate  # If not a load instruction, terminate
     
     li t2, 0x7000           # Mask for funct3 (bits 12-14)
     and t3, t1, t2          # Extract funct3
     li t2, 0x2000           # funct3 for lw (010)
-    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
+    bne t3, t2, do_terminate  # If not lw (could be lb, lh, etc.), terminate
     
     # Extract the destination register (rd) from the instruction (bits 7-11)
     li t2, 0xF80            # Mask for rd (bits 7-11)
@@ -315,12 +264,14 @@ handle_data_misalign:
     # Return from trap
     mret
 
-go_terminate:
+do_terminate:
     # Restore stack before jumping to terminate
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
 
+
+    
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
 # keeping this in this form to make it easier for you to debug.
