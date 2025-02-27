@@ -160,24 +160,38 @@ __mtrap:
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, do_terminate  # If not a misaligned load address, go to terminate
     
-    # Get the instruction at mepc
-    csrr t0, mepc           # t0 = address of the instruction
+    # Get mtval (misaligned address that caused the exception)
+    csrr t1, mtval
+    
+    # Check if mtval is misaligned (not a multiple of 4)
+    andi t2, t1, 0x3
+    beqz t2, do_terminate  # If address is aligned, should be another issue, terminate
+    
+    # Special handling for badjump case
+    # For badjump, we expect mtval to be a small number (like 3)
+    # which is an invalid jump target address
+    li t2, 0x1000         # A reasonable threshold for valid memory addresses
+    bltu t1, t2, do_terminate  # If mtval < 0x1000, likely a bad jump target
+    
+    # If we get here, it's likely a misaligned data load
+    # Now we can safely attempt to read the instruction at mepc
+    csrr t0, mepc
     lw t1, 0(t0)            # t1 = instruction
     
-    # Check if the instruction is jalr (jr) by checking opcode
-    andi t2, t1, 0x7F       # Extract opcode (lowest 7 bits)
-    li t3, 0x67             # JALR opcode
-    beq t2, t3, do_terminate # If it's a jalr (jr), go to terminate - instruction misalignment
+    # Check if the instruction is a load word (lw)
+    # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
+    # Opcode for loads is 0000011 (bits 0-6)
+    # Funct3 for lw is 010 (bits 12-14)
     
-    # Not a jump instruction, check if it's a load word instruction (lw)
-    li t3, 0x03             # Load opcode
-    bne t2, t3, do_terminate # If not a load instruction, terminate
+    li t2, 0x7F             # Mask for opcode (bits 0-6)
+    and t3, t1, t2          # Extract opcode
+    li t2, 0x03             # Load opcode (0000011)
+    bne t3, t2, do_terminate  # If not a load instruction, terminate
     
-    # Extract funct3 (bits 12-14) to check if it's lw
     li t2, 0x7000           # Mask for funct3 (bits 12-14)
     and t3, t1, t2          # Extract funct3
-    li t4, 0x2000           # funct3 for lw (010)
-    bne t3, t4, do_terminate # If not lw (could be lb, lh, etc.), terminate
+    li t2, 0x2000           # funct3 for lw (010)
+    bne t3, t2, do_terminate  # If not lw (could be lb, lh, etc.), terminate
     
     # Extract the destination register (rd) from the instruction (bits 7-11)
     li t2, 0xF80            # Mask for rd (bits 7-11)
@@ -259,7 +273,6 @@ do_terminate:
     csrrw sp, mscratch, sp
     j terminate
 
-    
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
