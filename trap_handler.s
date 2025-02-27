@@ -160,20 +160,27 @@ __mtrap:
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
     
-    # Check if this is a misaligned instruction fetch (instruction address misaligned)
-    # by comparing mtval and mepc
-    csrr t0, mepc           # t0 = address of the instruction
-    csrr t1, mtval          # t1 = misaligned address that caused the exception
+    # For instruction fetch misalignment (like jr a0 with a0=3), we need to check:
+    # 1. If mtval is misaligned (not a multiple of 4)
+    # 2. If mtval is the address we tried to jump to
+    csrr t0, mtval          # t0 = misaligned address that caused the exception
     
-    # If this is an instruction fetch issue, mtval will be the same as the jump target
-    # and related to mepc (which will be the address of the jr instruction)
-    # Handle this special case for instruction fetch misalignment
-    beq t0, t1, handle_data_misalign  # If they're equal, it's not an instruction fetch
+    # Check if mtval is misaligned (not a multiple of 4)
+    andi t1, t0, 0x3        # Check if lowest 2 bits are set (not aligned to 4 bytes)
+    beqz t1, handle_data_misalign # If aligned, treat as normal data misalignment
     
-    # At this point, we know it's likely an instruction fetch issue (jump to misaligned address)
-    # Set mepc to a known good address to continue execution (in this case, terminate)
-    la t0, terminate        # Load address of terminate function
-    csrw mepc, t0           # Set mepc to terminate function
+    # Check instruction at mepc
+    csrr t1, mepc           # t1 = address of the instruction
+    lw t2, 0(t1)            # t2 = instruction at mepc
+    
+    # Extract opcode (bits 0-6)
+    andi t3, t2, 0x7F       
+    
+    # If opcode is 0x67 (jalr/jr), it's an instruction fetch misalignment
+    li t4, 0x67             # jalr opcode
+    beq t3, t4, go_terminate # If jr/jalr instruction, go to terminate
+    
+    # Otherwise, proceed with regular misaligned load handling
     
     # Restore all registers from the stack
     lw x1, 4(sp)
@@ -216,6 +223,7 @@ __mtrap:
 
 handle_data_misalign:
     # Get the instruction that caused the exception
+    csrr t0, mepc           # t0 = address of the instruction
     lw t1, 0(t0)            # t1 = instruction
     
     # Check if the instruction is a load word (lw)
@@ -312,8 +320,6 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
-    
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
