@@ -107,16 +107,16 @@ __mstart:
 
 
 __mtrap:
-    # 交换 sp 和 mscratch，切换到内核栈
+    # Swap sp and mscratch to get a kernel stack
     csrrw sp, mscratch, sp
     
-    # 分配栈空间保存所有寄存器（32 * 4 bytes = 128 bytes）
+    # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
     addi sp, sp, -128
-
-    # 保存所有寄存器到栈
+    
+    # Save all registers to the stack
     sw x0, 0(sp)
     sw x1, 4(sp)
-    sw x2, 8(sp)  # 原始用户栈指针
+    sw x2, 8(sp)  # Save the original user stack pointer
     sw x3, 12(sp)
     sw x4, 16(sp)
     sw x5, 20(sp)
@@ -147,78 +147,77 @@ __mtrap:
     sw x30, 120(sp)
     sw x31, 124(sp)
     
-    # 获取 mcause，检查是否是异常还是中断
+    # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
     csrr t0, mcause
-    li t1, 0x80000000    # 最高位掩码
+    li t1, 0x80000000    # Mask for highest bit
     and t2, t0, t1
-    bnez t2, go_terminate  # 如果是中断，直接终止
+    bnez t2, go_terminate  # If it's an interrupt, go to terminate
+    
+    # Check if the exception is a misaligned load address (cause = 4)
+    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
+    and t0, t0, t2          # Clear the highest bit to get the exception code
+    li t1, 4                # Misaligned load address exception code
+    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
+    
+    # Get the instruction that caused the exception
+    csrr t0, mepc           # t0 = address of the instruction
+    csrr t4, mtval          # t4 = misaligned address
 
-    # 取 mcause 低 31 位
-    li t2, 0x7FFFFFFF  # 掩码清除最高位
-    and t0, t0, t2      # 取得异常代码
+    # Check if the misaligned address is the instruction fetch address
+    bne t4, t0, not_instruction_fetch  # If mtval != mepc, continue handling as lw
+    
+    j go_terminate          # Otherwise, terminate (instruction fetch error)
 
-    # 检查是否是取指令 misaligned
-    li t1, 0x0          # 取指令地址未对齐异常代码
-    beq t0, t1, go_terminate  # 如果是取指令异常，终止
+not_instruction_fetch:
+    lw t1, 0(t0)            # Load the instruction
 
-    # 检查是否是 load misaligned
-    li t1, 4            # Load Address Misaligned 异常代码
-    bne t0, t1, go_terminate  # 不是 load misaligned 直接终止
-
-    # 通过 mepc 和 mtval 区分是取指令异常还是 lw
-    csrr t3, mepc      # 获取 mepc（导致异常的 PC）
-    csrr t4, mtval     # 获取 mtval（发生错误的地址）
-    beq t3, t4, go_terminate  # 如果 mepc == mtval，说明是取指令异常，终止
-
-    # 读取导致异常的指令
-    lw t1, 0(t3)       # t1 = 指令值
-
-    # 检查是否是 lw 指令
-    li t2, 0x7F        # Opcode 掩码（bits 0-6）
-    and t3, t1, t2     # 提取 opcode
-    li t2, 0x03        # Load opcode（0000011）
-    bne t3, t2, go_terminate  # 不是 load 指令，终止
-
-    li t2, 0x7000      # Funct3 掩码（bits 12-14）
-    and t3, t1, t2     # 提取 funct3
-    li t2, 0x2000      # Funct3 = 010（lw）
-    bne t3, t2, go_terminate  # 不是 lw（可能是 lb, lh 等），终止
-
-    # 提取目的寄存器（rd），bits 7-11
-    li t2, 0xF80       # rd 掩码
-    and t3, t1, t2
-    srli t3, t3, 7     # 右移得到寄存器编号
-
-    # 获取未对齐的加载地址
-    csrr t4, mtval     # t4 = 触发异常的地址
-
-    # 逐字节读取并拼接为 32-bit
-    lbu t5, 0(t4)      # 低 8 位
-    lbu t6, 1(t4)      # 次低 8 位
-    slli t6, t6, 8
-    or t5, t5, t6
-
-    lbu t6, 2(t4)      # 次高 8 位
-    slli t6, t6, 16
-    or t5, t5, t6
-
-    lbu t6, 3(t4)      # 高 8 位
-    slli t6, t6, 24
-    or t5, t5, t6
-
-    # 计算 rd 在栈中的位置
-    slli t6, t3, 2     # t6 = rd * 4
-    add t6, t6, sp     # t6 = 栈中 rd 位置
-
-    # 存入 rd 在栈中的值
+    # Check if the instruction is a load word (lw)
+    li t2, 0x7F             # Mask for opcode (bits 0-6)
+    and t3, t1, t2          # Extract opcode
+    li t2, 0x03             # Load opcode (0000011)
+    bne t3, t2, go_terminate  # If not a load instruction, terminate
+    
+    li t2, 0x7000           # Mask for funct3 (bits 12-14)
+    and t3, t1, t2          # Extract funct3
+    li t2, 0x2000           # funct3 for lw (010)
+    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
+    
+    # Extract the destination register (rd) from the instruction (bits 7-11)
+    li t2, 0xF80            # Mask for rd (bits 7-11)
+    and t3, t1, t2          # Extract rd bits
+    srli t3, t3, 7          # Shift right to get the register number
+    
+    # Load the misaligned address from mtval
+    csrr t4, mtval          # t4 = misaligned address
+    
+    # Load the bytes individually and combine them
+    lbu t5, 0(t4)           # Load first byte (least significant)
+    lbu t6, 1(t4)           # Load second byte
+    slli t6, t6, 8          # Shift left by 8 bits
+    or t5, t5, t6           # Combine
+    
+    lbu t6, 2(t4)           # Load third byte
+    slli t6, t6, 16         # Shift left by 16 bits
+    or t5, t5, t6           # Combine
+    
+    lbu t6, 3(t4)           # Load fourth byte (most significant)
+    slli t6, t6, 24         # Shift left by 24 bits
+    or t5, t5, t6           # Combine
+    
+    # Now t5 contains the correctly loaded word
+    # Calculate the address in the stack where the destination register is saved
+    slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
+    add t6, t6, sp          # t6 = address of rd in the stack
+    
+    # Store the loaded value to the destination register's saved location
     sw t5, 0(t6)
-
-    # 修正 mepc，跳过导致异常的指令
+    
+    # Increment mepc to skip the faulting instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-
-    # 恢复所有寄存器
+    
+    # Restore all registers from the stack
     lw x1, 4(sp)
     lw x3, 12(sp)
     lw x4, 16(sp)
@@ -249,20 +248,19 @@ __mtrap:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-
-    # 释放栈空间并恢复用户栈
+    
+    # Deallocate stack space and swap back to user stack
     addi sp, sp, 128
     csrrw sp, mscratch, sp
-
-    # 从 trap 返回
+    
+    # Return from trap
     mret
 
 go_terminate:
-    # 恢复栈并终止
+    # Restore stack before jumping to terminate
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
 
 
 
