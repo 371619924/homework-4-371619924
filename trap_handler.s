@@ -114,7 +114,6 @@ __mtrap:
     addi sp, sp, -128
     
     # Save all registers to the stack
-    sw x0, 0(sp)
     sw x1, 4(sp)
     sw x2, 8(sp)  # Save the original user stack pointer
     sw x3, 12(sp)
@@ -169,10 +168,12 @@ __mtrap:
     csrr t0, mepc           # t0 = address of the instruction
     csrr t4, mtval          # t4 = misaligned address
 
-    # Check if the misaligned address is the instruction fetch address
-    beq t4, t0, go_terminate  # If mtval == mepc, terminate (misaligned instruction fetch)
+    # Check if the misaligned load is caused by instruction fetch
+    bne t4, t0, not_instruction_fetch  # If mtval != mepc, it's a data load, continue handling
 
-    # Otherwise, handle misaligned load (`lw`)
+    j go_terminate          # Otherwise, terminate (misaligned instruction fetch)
+
+not_instruction_fetch:
     lw t1, 0(t0)            # Load the instruction
 
     # Check if the instruction is a load word (lw)
@@ -222,7 +223,9 @@ __mtrap:
     csrw mepc, t0
     
     # Restore all registers from the stack
+restore_registers:
     lw x1, 4(sp)
+    lw x2, 8(sp)    # 恢复用户态栈指针
     lw x3, 12(sp)
     lw x4, 16(sp)
     lw x5, 20(sp)
@@ -252,8 +255,8 @@ __mtrap:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-    
-    # Deallocate stack space and swap back to user stack
+
+    # Deallocate stack space and restore user stack
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     
@@ -264,7 +267,6 @@ go_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
 
 
 # This code is taken from the default VRV system code.  It prints out
