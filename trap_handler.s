@@ -153,9 +153,15 @@ __mtrap:
     and t2, t0, t1
     bnez t2, go_terminate  # If it's an interrupt, go to terminate
     
-    # Check if the exception is a misaligned load address (cause = 4)
-    li t2, 0x7FFFFFFF       # Load mask to clear highest bit
-    and t0, t0, t2          # Clear the highest bit to get the exception code
+    # Extract exception code by clearing highest bit
+    li t2, 0x7FFFFFFF
+    and t0, t0, t2
+    
+    # Check if the exception is a misaligned instruction fetch (mcause = 0)
+    li t1, 0              # Misaligned instruction fetch cause code
+    beq t0, t1, go_terminate  # If it's a misaligned instruction fetch, terminate
+
+    # Check if the exception is a misaligned load address (mcause = 4)
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
     
@@ -164,11 +170,9 @@ __mtrap:
     csrr t4, mtval          # t4 = misaligned address
 
     # Check if the misaligned address is the instruction fetch address
-    bne t4, t0, not_instruction_fetch  # If mtval != mepc, continue handling as lw
-    
-    j go_terminate          # Otherwise, terminate (instruction fetch error)
+    beq t4, t0, go_terminate  # If mtval == mepc, terminate (misaligned instruction fetch)
 
-not_instruction_fetch:
+    # Otherwise, handle misaligned load (`lw`)
     lw t1, 0(t0)            # Load the instruction
 
     # Check if the instruction is a load word (lw)
@@ -257,7 +261,6 @@ not_instruction_fetch:
     mret
 
 go_terminate:
-    # Restore stack before jumping to terminate
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
