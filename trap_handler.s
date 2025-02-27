@@ -110,10 +110,10 @@ __mstart:
 __mtrap:
     # Swap sp and mscratch to get a kernel stack
     csrrw sp, mscratch, sp
-
+    
     # Allocate space on stack for all registers (32 registers * 4 bytes = 128 bytes)
     addi sp, sp, -128
-
+    
     # Save all registers to the stack
     sw x0, 0(sp)
     sw x1, 4(sp)
@@ -147,76 +147,73 @@ __mtrap:
     sw x29, 116(sp)
     sw x30, 120(sp)
     sw x31, 124(sp)
-
+    
     # Check if mcause highest bit is 1 (interrupt) or 0 (exception)
     csrr t0, mcause
     li t1, 0x80000000    # Mask for highest bit
     and t2, t0, t1
-    bnez t2, go_terminate  # If it's an interrupt, go to terminate
-
+    bnez t2, do_terminate  # If it's an interrupt, go to terminate
+    
     # Check if the exception is a misaligned load address (cause = 4)
     li t2, 0x7FFFFFFF       # Load mask to clear highest bit
     and t0, t0, t2          # Clear the highest bit to get the exception code
     li t1, 4                # Misaligned load address exception code
-    bne t0, t1, go_terminate  # If not a misaligned load address, go to terminate
-
-    # 判断是否为取指异常：比较 mepc 和 mtval
+    bne t0, t1, do_terminate  # If not a misaligned load address, go to terminate
+    
+    # Get the instruction at mepc
     csrr t0, mepc           # t0 = address of the instruction
-    csrr t1, mtval          # t1 = misaligned address that caused the exception
-    beq t0, t1, proceed_data_load  # 如果相等，则为数据 misaligned，继续处理
-    andi t2, t1, 0x3        # 检查 mtval 的低两位（是否不为 0）
-    bnez t2, go_terminate   # 若低两位非 0，说明是取指 misaligned，直接终止
-
-proceed_data_load:
-    # Get the instruction that caused the exception
     lw t1, 0(t0)            # t1 = instruction
-
-    # Check if the instruction is a load word (lw)
-    li t2, 0x7F             # Mask for opcode (bits 0-6)
-    and t3, t1, t2          # Extract opcode
-    li t2, 0x03             # Load opcode (0000011)
-    bne t3, t2, go_terminate  # If not a load instruction, terminate
-
+    
+    # Check if the instruction is jalr (jr) by checking opcode
+    andi t2, t1, 0x7F       # Extract opcode (lowest 7 bits)
+    li t3, 0x67             # JALR opcode
+    beq t2, t3, do_terminate # If it's a jalr (jr), go to terminate - instruction misalignment
+    
+    # Not a jump instruction, check if it's a load word instruction (lw)
+    li t3, 0x03             # Load opcode
+    bne t2, t3, do_terminate # If not a load instruction, terminate
+    
+    # Extract funct3 (bits 12-14) to check if it's lw
     li t2, 0x7000           # Mask for funct3 (bits 12-14)
     and t3, t1, t2          # Extract funct3
-    li t2, 0x2000           # funct3 for lw (010)
-    bne t3, t2, go_terminate  # If not lw (could be lb, lh, etc.), terminate
-
+    li t4, 0x2000           # funct3 for lw (010)
+    bne t3, t4, do_terminate # If not lw (could be lb, lh, etc.), terminate
+    
     # Extract the destination register (rd) from the instruction (bits 7-11)
     li t2, 0xF80            # Mask for rd (bits 7-11)
     and t3, t1, t2          # Extract rd bits
     srli t3, t3, 7          # Shift right to get the register number
-
+    
     # Get the misaligned address from mtval
     csrr t4, mtval          # t4 = misaligned address
-
+    
     # Load the bytes individually and combine them
     lbu t5, 0(t4)           # Load first byte (least significant)
     lbu t6, 1(t4)           # Load second byte
     slli t6, t6, 8          # Shift left by 8 bits
     or t5, t5, t6           # Combine
-
+    
     lbu t6, 2(t4)           # Load third byte
     slli t6, t6, 16         # Shift left by 16 bits
     or t5, t5, t6           # Combine
-
+    
     lbu t6, 3(t4)           # Load fourth byte (most significant)
     slli t6, t6, 24         # Shift left by 24 bits
     or t5, t5, t6           # Combine
-
+    
     # Now t5 contains the correctly loaded word
     # Calculate the address in the stack where the destination register is saved
     slli t6, t3, 2          # t6 = rd * 4 (shift left by 2 instead of multiply)
     add t6, t6, sp          # t6 = address of rd in the stack
-
+    
     # Store the loaded value to the destination register's saved location
     sw t5, 0(t6)
-
+    
     # Increment mepc to skip the faulting instruction
     csrr t0, mepc
     addi t0, t0, 4
     csrw mepc, t0
-
+    
     # Restore all registers from the stack
     lw x1, 4(sp)
     lw x3, 12(sp)
@@ -248,20 +245,21 @@ proceed_data_load:
     lw x29, 116(sp)
     lw x30, 120(sp)
     lw x31, 124(sp)
-
+    
     # Deallocate stack space and swap back to user stack
     addi sp, sp, 128
     csrrw sp, mscratch, sp
-
+    
     # Return from trap
     mret
 
-go_terminate:
+do_terminate:
     # Restore stack before jumping to terminate
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
 
+    
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
