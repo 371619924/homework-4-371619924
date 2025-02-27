@@ -160,27 +160,39 @@ __mtrap:
     li t1, 4                # Misaligned load address exception code
     bne t0, t1, do_terminate  # If not a misaligned load address, go to terminate
     
-    # First, read the instruction at mepc
-    csrr t0, mepc           # t0 = address of the instruction
+    # Following the hint: Compare mtval and mepc to detect instruction fetch misalignment
+    csrr t0, mepc           # t0 = address of the instruction 
+    csrr t1, mtval          # t1 = misaligned address that caused the exception
+    
+    # Check if mtval and mepc are different (instruction fetch misalignment)
+    # For jr a0 with a0=3, mepc would be the address of the jr instruction
+    # and mtval would be 3 (the target address)
+    beq t0, t1, check_data_misalign  # If they're the same, check for data misalignment
+    
+    # If mtval and mepc are different, and mtval is not aligned (has lower bits set),
+    # it's an instruction fetch misalignment (like jr a0 with a0=3)
+    andi t2, t1, 0x3        # Check if lowest 2 bits are set (not aligned to 4 bytes)
+    bnez t2, do_terminate   # If misaligned, it's an instruction fetch error, so terminate
+    
+check_data_misalign:
+    # Now we know it's probably a data misalignment
+    # Get the instruction that caused the exception
     lw t1, 0(t0)            # t1 = instruction
     
-    # Extract opcode (lowest 7 bits)
+    # Check if the instruction is a load word (lw)
+    # RISC-V lw instruction: 0000000_00000_00000_010_00000_0000011
+    # Opcode for loads is 0000011 (bits 0-6)
+    # Funct3 for lw is 010 (bits 12-14)
+    
     li t2, 0x7F             # Mask for opcode (bits 0-6)
     and t3, t1, t2          # Extract opcode
+    li t2, 0x03             # Load opcode (0000011)
+    bne t3, t2, do_terminate  # If not a load instruction, terminate
     
-    # Check if instruction is JALR (opcode 0x67)
-    li t4, 0x67             # JALR opcode
-    beq t3, t4, do_terminate  # If it's a jalr (jr), go to terminate - instruction misalignment
-    
-    # If not JALR, check if it's a load instruction (opcode 0x03)
-    li t4, 0x03             # Load opcode
-    bne t3, t4, do_terminate  # If not a load instruction, terminate
-    
-    # Extract funct3 (bits 12-14) to check if it's lw
     li t2, 0x7000           # Mask for funct3 (bits 12-14)
     and t3, t1, t2          # Extract funct3
-    li t4, 0x2000           # funct3 for lw (010)
-    bne t3, t4, do_terminate  # If not lw (could be lb, lh, etc.), terminate
+    li t2, 0x2000           # funct3 for lw (010)
+    bne t3, t2, do_terminate  # If not lw (could be lb, lh, etc.), terminate
     
     # Extract the destination register (rd) from the instruction (bits 7-11)
     li t2, 0xF80            # Mask for rd (bits 7-11)
@@ -261,9 +273,6 @@ do_terminate:
     addi sp, sp, 128
     csrrw sp, mscratch, sp
     j terminate
-
-    
-
 
 # This code is taken from the default VRV system code.  It prints out
 # a message indicating the cause of an unhandled exception.  We are
